@@ -1,6 +1,15 @@
 # SparseDrive: End-to-End Autonomous Driving via Sparse Scene Representation
 
-## Model Architecture
+## News
+* **`31 May, 2024`:** We release the SparseDrive paper on [arXiv]().
+
+
+## Introduction
+> SparseDrive is a Sparse-Centric paradigm for end-to-end autonomous driving.
+- We explore the sparse scene representation for end-to-end autonomous driving and propose a Sparse-Centric paradigm named SparseDrive, which unifies multiple tasks with sparse instance representation.
+- We revise the great similarity shared between motion prediction and planning, correspondingly leading to a parallel design for motion planner. We further propose a hierarchical planning selection strategy incorporating a collision-aware rescore module to boost the planning performance.
+- On the challenging nuScenes benchmark, SparseDrive surpasses previous SOTA methods in terms of all metrics, especially the safety-critical metric collision rate, while keeping much higher training and inference efficiency.
+
 <center>
     <img style="border-radius: 0.3125em;
     box-shadow: 0 2px 4px 0 rgba(34,36,38,.12),0 2px 10px 0 rgba(34,36,38,.08);" 
@@ -59,6 +68,7 @@
 
 
 ## Citation
+If you find SparseDrive useful in your research or applications, please consider giving us a star &#127775; and citing it by the following BibTeX entry.
 ```
 ```
 
