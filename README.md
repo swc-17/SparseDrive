@@ -1,5 +1,7 @@
 # SparseDrive: End-to-End Autonomous Driving via Sparse Scene Representation
 
+https://github.com/swc-17/SparseDrive/assets/64842878/867276dc-7c19-4e01-9a8e-81c4ed844745
+
 ## News
 * **`31 May, 2024`:** We release the SparseDrive paper on [arXiv]().
 
