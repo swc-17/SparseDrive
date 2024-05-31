@@ -84,8 +84,9 @@ If you find SparseDrive useful in your research or applications, please consider
 
 ## Acknowledgement
 - [Sparse4D](https://github.com/HorizonRobotics/Sparse4D)
-- [mmdet3d](https://github.com/open-mmlab/mmdetection3d)
 - [UniAD](https://github.com/OpenDriveLab/UniAD) 
 - [VAD](https://github.com/hustvl/VAD)
 - [StreamPETR](https://github.com/exiawsh/StreamPETR)
+- [StreamMapNet](https://github.com/yuantianyuan01/StreamMapNet)
+- [mmdet3d](https://github.com/open-mmlab/mmdetection3d)
 
