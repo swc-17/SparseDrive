@@ -72,13 +72,11 @@ https://github.com/swc-17/SparseDrive/assets/64842878/867276dc-7c19-4e01-9a8e-81
 ## Citation
 If you find SparseDrive useful in your research or applications, please consider giving us a star &#127775; and citing it by the following BibTeX entry.
 ```
-@misc{sun2024sparsedrive,
-      title={SparseDrive: End-to-End Autonomous Driving via Sparse Scene Representation}, 
-      author={Wenchao Sun and Xuewu Lin and Yining Shi and Chuang Zhang and Haoran Wu and Sifa Zheng},
-      year={2024},
-      eprint={2405.19620},
-      archivePrefix={arXiv},
-      primaryClass={cs.CV}
+@article{sun2024sparsedrive,
+  title={SparseDrive: End-to-End Autonomous Driving via Sparse Scene Representation},
+  author={Sun, Wenchao and Lin, Xuewu and Shi, Yining and Zhang, Chuang and Wu, Haoran and Zheng, Sifa},
+  journal={arXiv preprint arXiv:2405.19620},
+  year={2024}
 }
 ```
 
