@@ -30,7 +30,7 @@ mkdir data
 ln -s path/to/nuscenes ./data/nuscenes
 ```
 
-Pack the meta-information and labels of the dataset, and generate the required pkl files to data/infos. Note that we also generate map_annos in data_converter, with a roi_size of (30, 60) as default, if you want a larger range, modify [this line]().
+Pack the meta-information and labels of the dataset, and generate the required pkl files to data/infos. Note that we also generate map_annos in data_converter, with a roi_size of (30, 60) as default, if you want a different range, you can modify roi_size in tools/data_converter/nuscenes_converter.py.
 ```bash
 sh scripts/create_data.sh
 ```
