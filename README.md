@@ -69,7 +69,7 @@ https://github.com/swc-17/SparseDrive/assets/64842878/867276dc-7c19-4e01-9a8e-81
 | SparseDrive-B | **0.29** | **0.55** | **0.91** | **0.58** | **0.01** | **0.02** | **0.13** | **0.06** | 7.3 |
 
 ## Results of released checkpoint
-We found some missed detection for collision rate evaluation in previous code, so we re-implement the evaluation metric in released code and provide updated results.
+We found that some collision cases were not taken into consideration in our previous code, so we re-implement the evaluation metric for collision rate in released code and provide updated results.
 
 ## Main results
 | Model | config | ckpt | log | det: NDS | mapping: mAP | track: AMOTA |track: AMOTP | motion: EPA_car |motion: minADE_car| motion: minFDE_car | motion: MissRate_car | planning: CR | planning: L2 |
