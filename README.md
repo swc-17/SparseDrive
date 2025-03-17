@@ -3,6 +3,7 @@
 https://github.com/swc-17/SparseDrive/assets/64842878/867276dc-7c19-4e01-9a8e-81c4ed844745
 
 ## News
+* **`17 March, 2025`:** SparseDrive is accepted by ICRA 2025.
 * **`24 June, 2024`:** We reorganize code for better readability. Code & Models are released.
 * **`31 May, 2024`:** We release the SparseDrive paper on [arXiv](https://arxiv.org/abs/2405.19620). Code & Models will be released in June, 2024. Please stay tuned!
 
