@@ -24,14 +24,31 @@ for idx in tqdm(range(len(data_infos))):
         continue
     navi_trajs[cmd].append(plan_traj)
 
+# clusters = []
+# for trajs in navi_trajs:
+#     trajs = np.concatenate(trajs, axis=0).reshape(-1, 12)
+#     cluster = KMeans(n_clusters=K).fit(trajs).cluster_centers_
+#     cluster = cluster.reshape(-1, 6, 2)
+#     clusters.append(cluster)
+#     for j in range(K):
+#         plt.scatter(cluster[j, :, 0], cluster[j, :,1])
 clusters = []
-for trajs in navi_trajs:
+is_zeros = []
+for i in range(len(navi_trajs)):
+    trajs = navi_trajs[i]
+    if(0 == len(trajs)):
+        is_zeros.append(i)
+        continue
     trajs = np.concatenate(trajs, axis=0).reshape(-1, 12)
     cluster = KMeans(n_clusters=K).fit(trajs).cluster_centers_
     cluster = cluster.reshape(-1, 6, 2)
     clusters.append(cluster)
     for j in range(K):
         plt.scatter(cluster[j, :, 0], cluster[j, :,1])
+
+if len(is_zeros) != 0:
+    clusters.insert(is_zeros[0], -clusters[0])
+
 plt.savefig(f'vis/kmeans/plan_{K}', bbox_inches='tight')
 plt.close()
 
