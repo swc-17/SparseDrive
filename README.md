@@ -94,11 +94,13 @@ We found that some collision cases were not taken into consideration in our prev
 ## Citation
 If you find SparseDrive useful in your research or applications, please consider giving us a star &#127775; and citing it by the following BibTeX entry.
 ```
-@article{sun2024sparsedrive,
-  title={SparseDrive: End-to-End Autonomous Driving via Sparse Scene Representation},
+@inproceedings{sun2025sparsedrive,
+  title={Sparsedrive: End-to-end autonomous driving via sparse scene representation},
   author={Sun, Wenchao and Lin, Xuewu and Shi, Yining and Zhang, Chuang and Wu, Haoran and Zheng, Sifa},
-  journal={arXiv preprint arXiv:2405.19620},
-  year={2024}
+  booktitle={2025 IEEE International Conference on Robotics and Automation (ICRA)},
+  pages={8795--8801},
+  year={2025},
+  organization={IEEE}
 }
 ```
 
