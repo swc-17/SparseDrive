@@ -1,0 +1,4 @@
+evalclean_navhard_a  sd_evalclean_navhard_a-rrv6ss
+evalclean_navhard_sd15  sd_evalclean_navhard_sd15-iffz7s
+evalclean_navtest_a  sd_evalclean_navtest_a-llbobz
+evalclean_navtest_sd15  sd_evalclean_navtest_sd15-2j48f7
