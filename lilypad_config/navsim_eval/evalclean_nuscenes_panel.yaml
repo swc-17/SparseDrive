@@ -1,0 +1,107 @@
+# nuScenes panel from the sd-clean tree: official SparseDrive stage2 vs the
+# V1 geometry-only planner (V6, 3 seeds) vs its image-feature control (V6c).
+# All stock 10-class / 6-step / rescore-OFF, withmap infos so map mAP is
+# scored, so every column is directly comparable.
+#
+# Reproduction targets (docs/declutter_experiment_plan.md section 8):
+#   official  det 0.414 map 0.565 L2 0.611 col 0.196
+#   V6 (mean) det 0.410 map 0.558 L2 0.647+-0.011 col 0.207+-0.038
+#   V6c       det 0.411 map 0.557 L2 0.601 col 0.173
+# 5 evals in parallel, one GPU each, on one 8-GPU node.
+name: sd_evalclean_nuscenes_panel
+model_identifier: other.training.sparsedrive.combined.v1
+
+cluster_resources:
+  num_gpus: 8
+  gpu_machine_type: a100.8
+  preemptible: when_quota_full
+  customer_resource: research
+  allowed_regions:
+    - us-chicago-1
+
+workload_variant_config:
+  workload_type: generic
+  entrypoint_fn: lilypad_entrypoint_nuscenes.eval_entrypoint_fn
+  entrypoint_fn_config:
+    num_gpus: 8
+    stage_nuscenes: true
+    results_prefix: "eval_logs/sd_clean/nuscenes_panel"
+    wandb_project: "sparsedrive-declutter"
+    stage_files: []
+    declutter_files:
+      - "data/infos/nuscenes_infos_val_withmap.pkl"
+      - "data/kmeans/kmeans_det_900.npy"
+      - "data/kmeans/kmeans_map_100.npy"
+      - "data/kmeans/kmeans_motion_6.npy"
+      - "data/kmeans/kmeans_plan_6.npy"
+    evals:
+      - name: "clean_official_stage2_nusc"
+        config_file: "projects/configs/declutter/stage2_v6c_ctrl.py"
+        ckpt_s3: "s3://research-datasets-chicago/users/tejan/sparsedrive/declutter/ckpt/sparsedrive_stage2.pth"
+        cfg_options: &detmapplan
+          - "evaluation.eval_mode.with_det=True"
+          - "evaluation.eval_mode.with_tracking=False"
+          - "evaluation.eval_mode.with_map=True"
+          - "evaluation.eval_mode.with_motion=False"
+          - "evaluation.eval_mode.with_planning=True"
+          - "model.head.motion_plan_head.planning_decoder.use_rescore=False"
+      - name: "clean_v6_geoinput_seed0"
+        config_file: "projects/configs/declutter/stage2_v6_geoinput.py"
+        ckpt_s3: "s3://research-datasets-chicago/users/tejan/sparsedrive/declutter/work_dirs_v2/stage2_v6_geoinput_seed0/iter_5860.pth"
+        cfg_options: *detmapplan
+      - name: "clean_v6_geoinput_seed1"
+        config_file: "projects/configs/declutter/stage2_v6_geoinput.py"
+        ckpt_s3: "s3://research-datasets-chicago/users/tejan/sparsedrive/declutter/work_dirs_v2/stage2_v6_geoinput_seed1/iter_5860.pth"
+        cfg_options: *detmapplan
+      - name: "clean_v6_geoinput_seed2"
+        config_file: "projects/configs/declutter/stage2_v6_geoinput.py"
+        ckpt_s3: "s3://research-datasets-chicago/users/tejan/sparsedrive/declutter/work_dirs_v2/stage2_v6_geoinput_seed2/iter_5860.pth"
+        cfg_options: *detmapplan
+      - name: "clean_v6c_ctrl_seed0"
+        config_file: "projects/configs/declutter/stage2_v6c_ctrl.py"
+        ckpt_s3: "s3://research-datasets-chicago/users/tejan/sparsedrive/declutter/work_dirs_v2/stage2_v6c_ctrl_seed0/iter_5860.pth"
+        cfg_options: *detmapplan
+
+runtime_environment:
+  code_assets:
+    root_directory: /home/tejan/lwm-rl/.wtc/worktrees/sd-clean/SparseDrive
+    pip_requirements_path: requirements_lilypad.txt
+    max_file_size_mb: 50
+    regex_excludes:
+      - "^/\\.git/"
+      - "/__pycache__/"
+      - "\\.egg-info/"
+      - "\\.so$"
+      - "\\.pyc$"
+      - "\\.pth$"
+      - "\\.pkl$"
+      - "\\.tar$"
+      - "\\.tar\\.gz$"
+      - "\\.log$"
+      - "\\.png$"
+      - "\\.jpg$"
+      - "\\.mp4$"
+      - "^/data/"
+      - "^/work_dirs/"
+      - "^/ckpt/"
+      - "^/wandb/"
+      - "^/vis/"
+      - "^/logs/"
+
+  required_environment_variables:
+    - WANDB_API_KEY
+    - AWS_ACCESS_KEY_ID
+    - AWS_SECRET_ACCESS_KEY
+
+  constant_environment_variables:
+    AWS_ENDPOINT_URL: "https://idskhu5vqvtl.compat.objectstorage.us-chicago-1.oraclecloud.com"
+    AWS_ENDPOINT_URL_S3: "https://idskhu5vqvtl.compat.objectstorage.us-chicago-1.oraclecloud.com"
+    AWS_DEFAULT_REGION: "us-chicago-1"
+    AWS_REGION: "us-chicago-1"
+    AWS_REQUEST_CHECKSUM_CALCULATION: "when_required"
+    AWS_RESPONSE_CHECKSUM_VALIDATION: "when_required"
+    WANDB_BASE_URL: "https://appliedintuition.wandb.io"
+    TORCH_CUDA_ARCH_LIST: "8.0"
+    PATH: /usr/local/cuda/bin:$PATH
+    LD_LIBRARY_PATH: /usr/local/cuda/lib64:$LD_LIBRARY_PATH
+    PYTHONUNBUFFERED: "1"

@@ -5,7 +5,8 @@ export AWS_PROFILE=oci.chi
 export AWS_ACCESS_KEY_ID=$(aws --profile oci.chi configure get aws_access_key_id)
 export AWS_SECRET_ACCESS_KEY=$(aws --profile oci.chi configure get aws_secret_access_key)
 LP=/home/tejan/miniconda3/envs/lilypad/bin/lilypad
-WORKLOADS="sd_evalclean_navtest_a-llbobz sd_evalclean_navtest_sd15-2j48f7 sd_evalclean_navhard_a-rrv6ss sd_evalclean_navhard_sd15-iffz7s"
+WORKLOADS="sd_evalclean_navtest_a-xycpio sd_evalclean_navtest_sd15-phr458 sd_evalclean_navhard_a-hcumq5 sd_evalclean_navhard_sd15-ukce7f sd_evalclean_nuscenes_panel-49fu6n"
+N_WORKLOADS=5
 
 while true; do
   done_count=0
@@ -20,7 +21,7 @@ while true; do
         done_count=$((done_count+1)) ;;
     esac
   done
-  if [ "$done_count" -eq 4 ]; then echo "RESULT_ALL_TERMINAL"; break; fi
+  if [ "$done_count" -eq "$N_WORKLOADS" ]; then echo "RESULT_ALL_TERMINAL"; break; fi
   echo "---"
-  sleep 300
+  sleep 180
 done

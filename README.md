@@ -1,3 +1,122 @@
+# SparseDrive V1 / V1.5 — geometry-only planner fork
+
+Fork of [swc-17/SparseDrive](https://github.com/swc-17/SparseDrive) carrying one
+load-bearing design change plus a NAVSIM port. The upstream README is preserved
+[below](#upstream-readme).
+
+## The design change: the planner reads geometry, not pixels
+
+Stock SparseDrive feeds the planner image-derived instance features. Both models
+here replace every one of those with an MLP encoding of the corresponding
+geometry, and build no ego CNN at all:
+
+- `geometric_inputs=True` substitutes `det_output/map_output["instance_feature"]`
+  with encodings of the 11-d agent boxes (position, size, yaw, velocity) and the
+  40-d map polylines, at the top of `MotionPlanningHead.forward` — before every
+  consumer, including `InstanceQueue.prepare_motion`, so temporal history is
+  geometry-derived too.
+- `use_cam_ego_feature=False` means the ego CNN is never constructed (not merely
+  unused). A constructor assert couples the two flags.
+
+**V1** keeps the stock regression planner. **V1.5** swaps in a trajectory
+vocabulary planner (`trajectory_vocab_planner.py`) that scores a fixed
+trajectory vocabulary and re-ranks it by predicted metric score
+(`pdm_metric_scorer.py`); it is likewise geometry-attention with no image reads.
+
+Each domain ships an image-feature twin as the control that isolates this one
+change: V6c on nuScenes, `imgfeat` on NAVSIM.
+
+Scope caveat, stated plainly: *which* top-50 agents and top-10 polylines reach
+the planner is still chosen by detection/map confidence, and the boxes and
+polylines themselves come from the camera-based perception stack.
+"Geometry-only" describes the planner's **inputs**, not the whole pipeline.
+
+Provenance: the decision rests on the declutter experiment in
+[docs/declutter_experiment_plan.md](docs/declutter_experiment_plan.md), where a
+standalone geometric planner over frozen stage-1 perception (`geo_planner/`)
+matched its image-feature control (L2 0.367 +/- 0.004 vs 0.361 +/- 0.010).
+
+## Model zoo
+
+All paths are absolute on the research box. `$LWM = /home/tejan/lwm-rl`,
+`$S3 = s3://research-datasets-chicago/users/tejan`.
+
+### nuScenes val — stock 10-class, 6-step, rescore-off
+
+| Model | Planner input | Config | Checkpoint |
+| --- | --- | --- | --- |
+| Official SparseDrive stage2 | image features | [stage2_v6c_ctrl.py](projects/configs/declutter/stage2_v6c_ctrl.py) (eval only) | `$LWM/SparseDrive/ckpt/sparsedrive_stage2.pth` |
+| **V1 geometry-only** (V6, seeds 0/1/2) | geometry | [stage2_v6_geoinput.py](projects/configs/declutter/stage2_v6_geoinput.py) | `$LWM/SparseDrive/work_dirs/stage2_v6_geoinput_seed{0,1,2}/iter_5860.pth` |
+| V1 image-feature control (V6c) | image features | [stage2_v6c_ctrl.py](projects/configs/declutter/stage2_v6c_ctrl.py) | `$LWM/SparseDrive/work_dirs/stage2_v6c_ctrl_seed0/iter_5860.pth` |
+
+S3 mirror: `$S3/sparsedrive/declutter/work_dirs_v2/<run>/iter_5860.pth`,
+official at `$S3/sparsedrive/declutter/ckpt/sparsedrive_stage2.pth`.
+
+### NAVSIM — navtrain 1,067-log split
+
+| Model | Planner input | Config | Checkpoint |
+| --- | --- | --- | --- |
+| Official SparseDriveV2 | vocabulary, planning-only | external | `$LWM/SparseDriveV2/weights/sparsedrive_navsimv1_92p2.ckpt`, `sparsedrive_navsimv2_90p3.ckpt` |
+| **V1 geometry-only** (A) | geometry | [..._stage2_geoinput_full.py](projects/configs/navsim/sparsedrive_navsim_stage2_geoinput_full.py) | `$LWM/SparseDrive/work_dirs/navsim_stage2_geoinput_full_16g/iter_8703.pth` |
+| V1 image-feature control | image features | [..._stage2_imgfeat_full.py](projects/configs/navsim/sparsedrive_navsim_stage2_imgfeat_full.py) | `$LWM/SparseDrive/work_dirs/navsim_stage2_imgfeat_full_16g/iter_8703.pth` |
+| **V1.5 vocabulary planner** | geometry | [..._stage2_vocab_metric_full.py](projects/configs/navsim/sparsedrive_navsim_stage2_vocab_metric_full.py) | `$LWM/.wtc/worktrees/sd1.5/SparseDrive/work_dirs/navsim_stage2_vocab_metric_16g/iter_8703.pth` |
+
+S3 mirror: `$S3/navsim/sparsedrive/work_dirs/<run>/iter_8703.pth`.
+
+SparseDriveV2 is an external baseline, not an ablation of this stack: it is
+planning-only (no detection/map/motion heads, so its perception cells are N/A)
+and trained on all 1,192 navtrain logs against our 1,067, roughly 12% more data.
+
+## Data paths
+
+| What | Path |
+| --- | --- |
+| nuScenes root | `data/nuscenes` -> `/media/applied/nuScenes` (`samples`, `sweeps`, `maps`, `v1.0-trainval`, `can_bus`) |
+| nuScenes infos (6-step, map-annotated) | `data/infos/nuscenes_infos_{train,val}_withmap.pkl` |
+| NAVSIM raw | `/media/applied/navsim` (`navsim_logs/`, `sensor_blobs/{mini,test,trainval}`, `maps/`, `navhard_two_stage/`) |
+| NAVSIM infos | `data/infos/navsim_infos_{navtrain_full,navtest,navmini}.pkl` |
+| Detection / map / motion / plan anchors | `data/kmeans/*.npy` |
+| V1.5 trajectory vocabulary | `data/kmeans/sparsedrive_v2/{path_1024.npy,velocity_256.npy,trajectory_1024_256.npz}` |
+| navtest metric caches (v1, v2) | `$LWM/SparseDriveV2/exp/metric_cache_navtest_v1`, `metric_cache_navtestv2` |
+| navhard two-stage metric cache | `work_dirs/navsim_eval/metric_cache_navhard2s_full` |
+| Geometry caches (`geo_planner/`) | `data/geometry_cache{,_v6,_v6b}` |
+
+S3 mirrors: nuScenes keyframes `$S3/sparsedrive/declutter/data/sd_nuscenes.tar`,
+nuScenes infos/anchors under `$S3/sparsedrive/declutter/data/`, NAVSIM infos,
+anchors, frame tars and metric caches under `$S3/navsim/sparsedrive/`.
+
+`SparseDriveV2` is a hard runtime dependency, not just a baseline: the NAVSIM
+scorers import its `navsim` package and read its pinned metric caches. It must
+sit at commit `94d01a6`.
+
+## Evaluating
+
+NAVSIM has three protocols; never mix their caches, since the v1 pickles
+deserialize `navsim.navsim_v1.*` classes.
+
+| Protocol | Script | Cache | Tokens |
+| --- | --- | --- | --- |
+| navtest v1 PDMS | `navsim_agent/score_pdm_v1.py` | `metric_cache_navtest_v1` | 12,146 |
+| navtest v2 EPDMS | `navsim_agent/score_epdms_navtest_v2.py` | `metric_cache_navtestv2` | 12,146 |
+| navhard two-stage EPDMS | `navsim_agent/score_epdms_two_stage.py` | `metric_cache_navhard2s_full` | 5,912 |
+
+Inference runs in the `sparsedrive310` env, scoring in `lilypad` (no single env
+has both the mm-stack and the navsim/nuplan stack). On the cluster:
+
+```bash
+bash lilypad_config/navsim_eval/submit.sh evalclean_
+```
+
+Each job uploads the tree at `runtime_environment.code_assets.root_directory`,
+so that key is what points the cluster at a given worktree. nuScenes evals go
+through `lilypad_entrypoint_nuscenes.eval_entrypoint_fn` (N parallel
+`tools/test.py` runs, one per GPU); NAVSIM through
+`lilypad_entrypoint_navsim.eval_entrypoint_fn`.
+
+---
+
+# Upstream README
+
 # SparseDrive: End-to-End Autonomous Driving via Sparse Scene Representation
 
 https://github.com/swc-17/SparseDrive/assets/64842878/867276dc-7c19-4e01-9a8e-81c4ed844745

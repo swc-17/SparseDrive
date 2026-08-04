@@ -1,0 +1,5 @@
+evalclean_navhard_a  sd_evalclean_navhard_a-hcumq5
+evalclean_navhard_sd15  sd_evalclean_navhard_sd15-ukce7f
+evalclean_navtest_a  sd_evalclean_navtest_a-xycpio
+evalclean_navtest_sd15  sd_evalclean_navtest_sd15-phr458
+evalclean_nuscenes_panel  sd_evalclean_nuscenes_panel-49fu6n
