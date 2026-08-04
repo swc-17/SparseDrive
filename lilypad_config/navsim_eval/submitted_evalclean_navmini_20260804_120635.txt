@@ -1,0 +1,2 @@
+evalclean_navmini_flow  sd_evalclean_navmini_flow-anoust
+evalclean_navmini_sd15  sd_evalclean_navmini_sd15-01k495

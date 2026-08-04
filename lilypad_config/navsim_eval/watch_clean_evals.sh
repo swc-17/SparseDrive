@@ -5,7 +5,7 @@ export AWS_PROFILE=oci.chi
 export AWS_ACCESS_KEY_ID=$(aws --profile oci.chi configure get aws_access_key_id)
 export AWS_SECRET_ACCESS_KEY=$(aws --profile oci.chi configure get aws_secret_access_key)
 LP=/home/tejan/miniconda3/envs/lilypad/bin/lilypad
-WORKLOADS="sd_evalclean_navtest_a-q4ttkp sd_evalclean_navtest_sd15-v4d7a2 sd_evalclean_navhard_a-3k99x2 sd_evalclean_navhard_sd15-990p14 sd_evalclean_nuscenes_panel-49fu6n"
+WORKLOADS="sd_evalclean_navmini_sd15-01k495 sd_evalclean_navmini_flow-bsccal"
 N_WORKLOADS=5
 
 while true; do
