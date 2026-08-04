@@ -16,7 +16,7 @@ while true; do
     dur=$(echo "$info" | awk '/^Duration/{print $2}')
     echo "$(date +%H:%M:%S) ${w%%-*} $st $dur"
     case "$st" in
-      *SUCCEEDED*|*FAILED*|*STOPPED*|*CANCELLED*|*ERROR*)
+      *COMPLETED*|*SUCCEEDED*|*FAILED*|*STOPPED*|*CANCELLED*|*ERROR*)
         echo "RESULT_TERMINAL $w $st"
         done_count=$((done_count+1)) ;;
     esac
