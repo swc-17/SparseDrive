@@ -236,19 +236,32 @@ class GeometryFileProducer:
                 f"{len(extra)} extra"
             )
 
-    @staticmethod
-    def _validate(token, values):
+    # The planner consumes only these four fields; newer artifacts may also
+    # carry class logits and max-sigmoid confidences for inspection.
+    PLANNER_FIELDS = {
+        "anchor_bbox": ((50, 11), np.float32),
+        "map_anchor": ((10, 40), np.float32),
+        "detection_valid": ((50,), np.bool_),
+        "map_valid": ((10,), np.bool_),
+    }
+    OPTIONAL_FIELDS = {
+        "detection_logits": ((50, 7), np.float32),
+        "map_logits": ((10, 3), np.float32),
+        "detection_scores": ((50,), np.float32),
+        "map_scores": ((10,), np.float32),
+    }
+
+    @classmethod
+    def _validate(cls, token, values):
         if not isinstance(values, Mapping):
             raise TypeError(f"geometry for {token} must be a mapping")
-        expected = {
-            "anchor_bbox": ((50, 11), np.float32),
-            "map_anchor": ((10, 40), np.float32),
-            "detection_valid": ((50,), np.bool_),
-            "map_valid": ((10,), np.bool_),
-        }
-        if set(values) != set(expected):
+        required = set(cls.PLANNER_FIELDS)
+        allowed = required | set(cls.OPTIONAL_FIELDS)
+        if not required <= set(values) or not set(values) <= allowed:
             raise KeyError(f"geometry for {token} has incorrect fields")
-        for name, (shape, dtype) in expected.items():
+        expected = {**cls.PLANNER_FIELDS, **cls.OPTIONAL_FIELDS}
+        for name in values:
+            shape, dtype = expected[name]
             value = np.asarray(values[name])
             if value.shape != shape or value.dtype != dtype:
                 raise ValueError(
@@ -287,8 +300,8 @@ class GeometryFileProducer:
         self.calls += 1
         self.used_tokens.add(token)
         return {
-            name: torch.as_tensor(value, device=self.device).unsqueeze(0)
-            for name, value in values.items()
+            name: torch.as_tensor(values[name], device=self.device).unsqueeze(0)
+            for name in self.PLANNER_FIELDS
         }
 
     def metadata(self):
