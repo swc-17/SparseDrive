@@ -14,6 +14,7 @@ workload_variant_config:
   entrypoint_fn: lilypad_entrypoint_navsim.eval_entrypoint_fn
   entrypoint_fn_config:
     mode: pdm_v1
+    num_gpus: 8
     num_shards: 8
     split: navtest
     config_file: projects/configs/navsim/sparsedrive_navsim_stage2_geoinput_full.py
