@@ -226,6 +226,41 @@ class GeometryFileTest(unittest.TestCase):
             )
         handle.close()
 
+    def test_optional_class_fields_are_validated_but_not_forwarded(self):
+        payload = artifact()
+        payload["geometry"]["a"].update(
+            {
+                "detection_logits": np.zeros((50, 7), dtype=np.float32),
+                "map_logits": np.zeros((10, 3), dtype=np.float32),
+                "detection_scores": np.full(50, 0.5, dtype=np.float32),
+                "map_scores": np.full(10, 0.5, dtype=np.float32),
+            }
+        )
+        handle = self.write(payload)
+        producer = GeometryFileProducer(handle.name, "cpu", {"a"}, "infos-hash")
+        geometry = producer({"_frame_token": "a"})
+        self.assertEqual(
+            set(geometry),
+            {"anchor_bbox", "map_anchor", "detection_valid", "map_valid"},
+        )
+        handle.close()
+
+        payload = artifact()
+        payload["geometry"]["a"]["detection_logits"] = np.zeros(
+            (50, 6), dtype=np.float32
+        )
+        handle = self.write(payload)
+        with self.assertRaisesRegex(ValueError, "detection_logits"):
+            GeometryFileProducer(handle.name, "cpu")
+        handle.close()
+
+        payload = artifact()
+        payload["geometry"]["a"]["unknown_field"] = np.zeros(1, dtype=np.float32)
+        handle = self.write(payload)
+        with self.assertRaisesRegex(KeyError, "incorrect fields"):
+            GeometryFileProducer(handle.name, "cpu")
+        handle.close()
+
     def test_invalid_artifacts_fail_closed(self):
         payload = artifact()
         payload["geometry"]["a"]["anchor_bbox"][0, 0] = np.nan
