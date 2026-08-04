@@ -19,14 +19,26 @@ class InstanceQueue(nn.Module):
         queue_length=0,
         tracking_threshold=0,
         feature_map_scale=None,
+        single_frame=False,
+        use_cam_ego_feature=True,
+        ego_anchor=None,
     ):
         super(InstanceQueue, self).__init__()
         self.embed_dims = embed_dims
         self.queue_length = queue_length
         self.tracking_threshold = tracking_threshold
+        # use_cam_ego_feature=False: geometric-input planner — the front-cam
+        # ego CNN is not built at all (avoids unused DDP parameters); the
+        # planner head adds an encoded ego anchor instead.
+        self.use_cam_ego_feature = use_cam_ego_feature
+        # single_frame: wipe all cross-frame state every forward, so the queue
+        # only ever holds the current frame and prev_ego_status is never used.
+        # Required when the det head runs non-temporal (instance_bank.mask is
+        # None, which the temporal code paths below cannot handle).
+        self.single_frame = single_frame
 
         kernel_size = tuple([int(x / 2) for x in feature_map_scale])
-        self.ego_feature_encoder = nn.Sequential(
+        self.ego_feature_encoder = None if not use_cam_ego_feature else nn.Sequential(
             nn.Conv2d(embed_dims, embed_dims, 3, stride=1, padding=1, bias=False),
             nn.BatchNorm2d(embed_dims),
             nn.Conv2d(embed_dims, embed_dims, 3, stride=2, padding=1, bias=False),
@@ -34,8 +46,22 @@ class InstanceQueue(nn.Module):
             nn.ReLU(),
             nn.AvgPool2d(kernel_size),
         )
+        # Ego box anchor [X, Y, Z, W, L, H, SIN_YAW, COS_YAW, VX, VY, VZ]
+        # in the current BEV frame. Config-driven so datasets with a
+        # different ego vehicle / reference frame (e.g. NAVSIM's Pacifica
+        # in the rear-axle frame) can override it; the default is the
+        # original nuScenes Renault Zoe anchor in the lidar frame. Note the
+        # W/L/H slots are log-extents and, matching the upstream convention
+        # (yaw = +90 deg, facing +Y), the W slot holds the along-heading
+        # (length) extent.
+        if ego_anchor is None:
+            ego_anchor = [
+                0, 0.5, -1.84 + 1.56 / 2,
+                np.log(4.08), np.log(1.73), np.log(1.56),
+                1, 0, 0, 0, 0,
+            ]
         self.ego_anchor = nn.Parameter(
-            torch.tensor([[0, 0.5, -1.84 + 1.56/2, np.log(4.08), np.log(1.73), np.log(1.56), 1, 0, 0, 0, 0],], dtype=torch.float32),
+            torch.tensor([ego_anchor], dtype=torch.float32),
             requires_grad=False,
         )
 
@@ -61,7 +87,10 @@ class InstanceQueue(nn.Module):
         batch_size,
         mask,
         anchor_handler,
+        ego_status=None,
     ):
+        if self.single_frame:
+            self.reset()
         if (
             self.period is not None
             and batch_size == self.period.shape[0]
@@ -93,8 +122,23 @@ class InstanceQueue(nn.Module):
         else:
             self.reset()
 
+        # Frame-independent perception deliberately resets the detector's
+        # InstanceBank before every frame, so its temporal-validity mask is
+        # absent.  The ego planner queue is still chronological and should
+        # retain its history.  This is opt-in at runtime; all existing model
+        # paths keep their original semantics.
+        if (
+            mask is None
+            and getattr(self, "_allow_missing_detection_mask", False)
+        ):
+            mask = det_output["instance_feature"].new_ones(
+                (batch_size,), dtype=torch.bool
+            )
+
         self.prepare_motion(det_output, mask)
-        ego_feature, ego_anchor = self.prepare_planning(feature_maps, mask, batch_size)
+        ego_feature, ego_anchor = self.prepare_planning(
+            feature_maps, mask, batch_size, ego_status=ego_status
+        )
 
         # temporal 
         temp_instance_feature = torch.stack(self.instance_feature_queue, dim=2)
@@ -162,17 +206,29 @@ class InstanceQueue(nn.Module):
         feature_maps,
         mask,
         batch_size,
+        ego_status=None,
     ):
         ## ego instance init
-        feature_maps_inv = feature_maps_format(feature_maps, inverse=True)
-        feature_map = feature_maps_inv[0][-1][:, 0]
-        ego_feature = self.ego_feature_encoder(feature_map)
-        ego_feature = ego_feature.unsqueeze(1).squeeze(-1).squeeze(-1)
+        if not self.use_cam_ego_feature:
+            # geometric-input planner: no image-derived ego feature anywhere
+            # (the head adds an encoded ego anchor to the returned zeros)
+            bsz = batch_size
+            dev = self.ego_anchor.device
+            ego_feature = torch.zeros(bsz, 1, self.embed_dims, device=dev)
+        else:
+            feature_maps_inv = feature_maps_format(feature_maps, inverse=True)
+            feature_map = feature_maps_inv[0][-1][:, 0]
+            ego_feature = self.ego_feature_encoder(feature_map)
+            ego_feature = ego_feature.unsqueeze(1).squeeze(-1).squeeze(-1)
 
         ego_anchor = torch.tile(
             self.ego_anchor[None], (batch_size, 1, 1)
         )
-        if self.prev_ego_status is not None:
+        if ego_status is not None:
+            # measured ego status from data (index 6 = forward velocity,
+            # same slot the cached predicted status uses below)
+            ego_anchor[..., VY] = ego_status[:, 6:7].to(ego_anchor.dtype)
+        elif self.prev_ego_status is not None:
             prev_ego_status = torch.where(
                 mask[:, None, None],
                 self.prev_ego_status,
@@ -203,7 +259,7 @@ class InstanceQueue(nn.Module):
     def cache_motion(self, instance_feature, det_output, metas):
         det_classification = det_output["classification"][-1].sigmoid()
         det_confidence = det_classification.max(dim=-1).values
-        instance_id = det_output['instance_id']
+        instance_id = det_output.get('instance_id')
         self.metas = metas
         self.prev_confidence = det_confidence.detach()
         self.prev_instance_id = instance_id

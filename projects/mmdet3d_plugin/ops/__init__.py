@@ -1,6 +1,11 @@
 import torch
 
-from .deformable_aggregation import DeformableAggregationFunction
+try:
+    from .deformable_aggregation import DeformableAggregationFunction
+    _DAF_AVAILABLE = True
+except ImportError:
+    DeformableAggregationFunction = None
+    _DAF_AVAILABLE = False
 
 
 def deformable_aggregation_function(

@@ -389,7 +389,7 @@ class NuScenes3DDataset(Dataset):
             gt_names=gt_names_3d,
         )
         if "instance_inds" in info:
-            instance_inds = np.array(info["instance_inds"], dtype=np.int)[mask]
+            instance_inds = np.array(info["instance_inds"], dtype=np.int64)[mask]
             anns_results["instance_inds"] = instance_inds
             
         if 'gt_agent_fut_trajs' in info:
@@ -861,7 +861,9 @@ class NuScenes3DDataset(Dataset):
 
         if eval_mode['with_map']:
             from .evaluation.map.vector_eval import VectorEvaluate
-            self.map_evaluator = VectorEvaluate(self.eval_config)
+            map_eval_config = copy.deepcopy(self.eval_config)
+            map_eval_config.pop("planning_metric", None)
+            self.map_evaluator = VectorEvaluate(map_eval_config)
             result_path = self.format_map_results(results, prefix=self.work_dir)
             map_results_dict = self.map_evaluator.evaluate(result_path, logger=logger)
             results_dict.update(map_results_dict)
@@ -874,7 +876,14 @@ class NuScenes3DDataset(Dataset):
         
         if eval_mode['with_planning']:
             from .evaluation.planning.planning_eval import planning_eval
-            planning_results_dict = planning_eval(results, self.eval_config, logger=logger)
+            # planning-metric knobs (n_future, ego geometry) travel inside
+            # eval_config under "planning_metric" but are not dataset args
+            # (same contract as NavSim3DDataset.evaluate); default (absent)
+            # is the historical 6-step / nuScenes-ego metric.
+            plan_eval_config = copy.deepcopy(self.eval_config)
+            metric_kwargs = plan_eval_config.pop("planning_metric", {})
+            planning_results_dict = planning_eval(
+                results, plan_eval_config, logger=logger, **metric_kwargs)
             results_dict.update(planning_results_dict)
 
         if show or out_dir:

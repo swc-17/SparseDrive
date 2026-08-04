@@ -231,3 +231,72 @@ class PhotoMetricDistortionMultiViewImage:
         repr_str += f"{(self.saturation_lower, self.saturation_upper)},\n"
         repr_str += f"hue_delta={self.hue_delta})"
         return repr_str
+
+
+@PIPELINES.register_module()
+class MultiViewUndistortImage(object):
+    """Deterministic multi-camera undistortion (NAVSIM port, Phase 1).
+
+    NAVSIM cameras carry nonzero plumb-bob distortion coefficients
+    (k1, k2, p1, p2, k3). SparseDrive's projection stack (lidar2img and both
+    deformable-aggregation heads) assumes an ideal pinhole camera, so each
+    image is rectified once, deterministically, BEFORE any resize/crop
+    augmentation. Rectification maps to the *same* camera matrix K, so
+    ``lidar2img`` / ``cam_intrinsic`` computed from the original K stay
+    valid and no distortion math ever reaches the CUDA deformable operator.
+
+    Per-camera rectification maps are cached on (K, dist, H, W); NAVSIM has
+    one fixed calibration per camera per log, so the cache stays tiny.
+
+    Expects ``results['cam_distortion']`` (list of (5,) arrays, dataset-
+    provided) alongside ``results['cam_intrinsic']``. Cameras with all-zero
+    coefficients pass through untouched.
+    """
+
+    def __init__(self, interpolation="linear"):
+        import cv2
+
+        self._interp = {
+            "linear": cv2.INTER_LINEAR,
+            "nearest": cv2.INTER_NEAREST,
+        }[interpolation]
+        self._map_cache = {}
+
+    def _get_maps(self, K, dist, h, w):
+        import cv2
+
+        key = (K.tobytes(), dist.tobytes(), h, w)
+        maps = self._map_cache.get(key)
+        if maps is None:
+            maps = cv2.initUndistortRectifyMap(
+                K.astype(np.float64),
+                dist.astype(np.float64),
+                None,
+                K.astype(np.float64),  # keep the same camera matrix
+                (w, h),
+                cv2.CV_32FC1,
+            )
+            self._map_cache[key] = maps
+        return maps
+
+    def __call__(self, results):
+        import cv2
+
+        dist_list = results.get("cam_distortion")
+        if dist_list is None:
+            return results
+        imgs = results["img"]
+        new_imgs = []
+        for i, img in enumerate(imgs):
+            dist = np.asarray(dist_list[i], dtype=np.float64).reshape(-1)
+            if not np.any(dist):
+                new_imgs.append(img)
+                continue
+            K = np.asarray(results["cam_intrinsic"][i])[:3, :3]
+            h, w = img.shape[:2]
+            map1, map2 = self._get_maps(K, dist, h, w)
+            new_imgs.append(
+                cv2.remap(img, map1, map2, interpolation=self._interp)
+            )
+        results["img"] = new_imgs
+        return results

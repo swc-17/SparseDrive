@@ -549,10 +549,17 @@ class Sparse4DHead(BaseModule):
 
     @force_fp32(apply_to=("model_outs"))
     def post_process(self, model_outs, output_idx=-1):
+        import inspect
+        decode_params = inspect.signature(self.decoder.decode).parameters
+        extra = {}
+        if "instance_feature" in decode_params:
+            extra["instance_feature"] = model_outs.get("instance_feature")
+            extra["anchor_embed"]     = model_outs.get("anchor_embed")
         return self.decoder.decode(
             model_outs["classification"],
             model_outs["prediction"],
             model_outs.get("instance_id"),
             model_outs.get("quality"),
             output_idx=output_idx,
+            **extra,
         )

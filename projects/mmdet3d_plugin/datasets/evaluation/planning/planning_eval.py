@@ -10,17 +10,21 @@ from mmdet.datasets import build_dataset, build_dataloader
 from projects.mmdet3d_plugin.datasets.utils import box3d_to_corners
 
 
-def check_collision(ego_box, boxes):
+def check_collision(ego_box, boxes, center_offset=0.5):
     '''
         ego_box: tensor with shape [7], [x, y, z, w, l, h, yaw]
         boxes: tensor with shape [N, 7]
+        center_offset: forward offset (m) from the trajectory point to the
+            ego box center. nuScenes/UniAD convention is 0.5 m; NAVSIM's
+            Pacifica has its geometric center 1.461 m ahead of the rear
+            axle (the trajectory reference point).
     '''
     if  boxes.shape[0] == 0:
         return False
 
-    # follow uniad, add a 0.5m offset
-    ego_box[0] += 0.5 * torch.cos(ego_box[6])
-    ego_box[1] += 0.5 * torch.sin(ego_box[6])
+    # follow uniad, add a forward offset (0.5m for nuScenes)
+    ego_box[0] += center_offset * torch.cos(ego_box[6])
+    ego_box[1] += center_offset * torch.sin(ego_box[6])
     ego_corners_box = box3d_to_corners(ego_box.unsqueeze(0))[0, [0, 3, 7, 4], :2]
     corners_box = box3d_to_corners(boxes)[:, [0, 3, 7, 4], :2]
     ego_poly = Polygon([(point[0], point[1]) for point in ego_corners_box])
@@ -57,9 +61,19 @@ class PlanningMetric():
         self,
         n_future=6,
         compute_on_step: bool = False,
+        ego_width=1.85,
+        ego_length=4.084,
+        ego_height=1.56,
+        ego_center_offset=0.5,
     ):
-        self.W = 1.85
-        self.H = 4.084
+        # Defaults reproduce the historical nuScenes/UniAD ego geometry
+        # bit-identically. NAVSIM (Pacifica, rear-axle frame) should pass
+        # n_future=8, ego_width=2.297, ego_length=5.176, ego_height=1.777,
+        # ego_center_offset=1.461.
+        self.W = ego_width
+        self.H = ego_length
+        self.ego_height = ego_height
+        self.ego_center_offset = ego_center_offset
 
         self.n_future = n_future
         self.reset()
@@ -75,14 +89,18 @@ class PlanningMetric():
         yaw = get_yaw(traj)
         ego_box = traj.new_zeros((n_future, 7))
         ego_box[:, :2] = traj
-        ego_box[:, 3:6] = ego_box.new_tensor([self.H, self.W, 1.56])
+        ego_box[:, 3:6] = ego_box.new_tensor(
+            [self.H, self.W, self.ego_height]
+        )
         ego_box[:, 6] = yaw
         collision = torch.zeros(n_future, dtype=torch.bool)
 
         for t in range(n_future):
             ego_box_t = ego_box[t].clone()
             boxes = fut_boxes[t][0].clone()
-            collision[t] = check_collision(ego_box_t, boxes)
+            collision[t] = check_collision(
+                ego_box_t, boxes, center_offset=self.ego_center_offset
+            )
         return collision
 
     def evaluate_coll(self, trajs, gt_trajs, fut_boxes):
@@ -131,11 +149,18 @@ class PlanningMetric():
         }
 
 
-def planning_eval(results, eval_config, logger):
+def planning_eval(results, eval_config, logger, n_future=6, **metric_kwargs):
+    """L2/collision planning diagnostic.
+
+    Defaults (n_future=6, nuScenes ego geometry) are bit-identical to the
+    historical 3 s nuScenes metric. NAVSIM configs pass n_future=8 plus the
+    Pacifica geometry through ``metric_kwargs`` (see PlanningMetric) for the
+    4 s / 0.5 s horizon.
+    """
     dataset = build_dataset(eval_config)
     dataloader = build_dataloader(
             dataset, samples_per_gpu=1, workers_per_gpu=1, shuffle=False, dist=False)
-    planning_metrics = PlanningMetric()
+    planning_metrics = PlanningMetric(n_future=n_future, **metric_kwargs)
     for i, data in enumerate(tqdm(dataloader)):
         sdc_planning = data['gt_ego_fut_trajs'].cumsum(dim=-2).unsqueeze(1)
         sdc_planning_mask = data['gt_ego_fut_masks'].unsqueeze(-1).repeat(1, 1, 2).unsqueeze(1)
@@ -145,23 +170,34 @@ def planning_eval(results, eval_config, logger):
             continue
         res = results[i]
         pred_sdc_traj = res['img_bbox']['final_planning'].unsqueeze(0)
-        planning_metrics.update(pred_sdc_traj[:, :6, :2], sdc_planning[0,:, :6, :2], sdc_planning_mask[0,:, :6, :2], fut_boxes)
-       
+        planning_metrics.update(
+            pred_sdc_traj[:, :n_future, :2],
+            sdc_planning[0, :, :n_future, :2],
+            sdc_planning_mask[0, :, :n_future, :2],
+            fut_boxes,
+        )
+
     planning_results = planning_metrics.compute()
     planning_metrics.reset()
     from prettytable import PrettyTable
     planning_tab = PrettyTable()
     metric_dict = {}
 
-    planning_tab.field_names = [
-    "metrics", "0.5s", "1.0s", "1.5s", "2.0s", "2.5s", "3.0s", "avg"]
+    planning_tab.field_names = (
+        ["metrics"]
+        + ["%.1fs" % (0.5 * (i + 1)) for i in range(n_future)]
+        + ["avg"]
+    )
+    # avg over the full-second horizons (1s/2s/3s for n_future=6 — the
+    # historical definition; 1s/2s/3s/4s for the NAVSIM 8-step horizon)
+    avg_indices = list(range(1, n_future, 2))
     for key in planning_results.keys():
         value = planning_results[key].tolist()
         new_values = []
         for i in range(len(value)):
             new_values.append(np.array(value[:i+1]).mean())
         value = new_values
-        avg = [value[1], value[3], value[5]]
+        avg = [value[i] for i in avg_indices]
         avg = sum(avg) / len(avg)
         value.append(avg)
         metric_dict[key] = avg

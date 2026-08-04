@@ -76,7 +76,8 @@ class FlashAttention(nn.Module):
             output = flash_attn_unpadded_kvpacked_func(
                 q, kv, cu_seqlens_q, cu_seqlens_k, max_sq, max_sk,
                 self.dropout_p if self.training else 0.0,
-                softmax_scale=self.softmax_scale, causal=causal
+                softmax_scale=self.softmax_scale, causal=causal,
+                deterministic=True,
             )
             output = rearrange(output, '(b s) ... -> b s ...', b=batch_size)
         else:
@@ -91,7 +92,8 @@ class FlashAttention(nn.Module):
             output_unpad = flash_attn_unpadded_kvpacked_func(
                 q, x_unpad, cu_seqlens_q, cu_seqlens_k, max_sq, max_sk,
                 self.dropout_p if self.training else 0.0,
-                softmax_scale=self.softmax_scale, causal=causal
+                softmax_scale=self.softmax_scale, causal=causal,
+                deterministic=True,
             )
             output = rearrange(output_unpad, '(b s) ... -> b s ...', b=batch_size)
 
