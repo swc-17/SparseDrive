@@ -38,7 +38,7 @@ workload_variant_config:
     - [data/kmeans/sparsedrive_v2/trajectory_1024_256.npz, data/kmeans/sparsedrive_v2/trajectory_1024_256.npz]
 runtime_environment:
   code_assets:
-    root_directory: /home/tejan/lwm-rl/.wtc/worktrees/sd-clean/SparseDrive
+    root_directory: /home/tejan/lwm-rl/SparseDrive
     pip_requirements_path: requirements_lilypad.txt
     max_file_size_mb: 50
     regex_excludes:

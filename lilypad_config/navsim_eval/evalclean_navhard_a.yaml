@@ -41,7 +41,7 @@ workload_variant_config:
     epdms_worker: ray_distributed_no_torch
 runtime_environment:
   code_assets:
-    root_directory: /home/tejan/lwm-rl/.wtc/worktrees/sd-clean/SparseDrive
+    root_directory: /home/tejan/lwm-rl/SparseDrive
     pip_requirements_path: requirements_lilypad.txt
     max_file_size_mb: 50
     regex_excludes:

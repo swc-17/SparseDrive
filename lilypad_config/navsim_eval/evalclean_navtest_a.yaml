@@ -35,7 +35,7 @@ workload_variant_config:
     - [data/kmeans/navtrain/kmeans_plan_6_navsim.npy, data/kmeans/kmeans_plan_6_navsim.npy]
 runtime_environment:
   code_assets:
-    root_directory: /home/tejan/lwm-rl/.wtc/worktrees/sd-clean/SparseDrive
+    root_directory: /home/tejan/lwm-rl/SparseDrive
     pip_requirements_path: requirements_lilypad.txt
     max_file_size_mb: 50
     regex_excludes:

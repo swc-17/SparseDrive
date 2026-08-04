@@ -6,7 +6,7 @@
 # this scores them, reusing the navtest-v2 metric cache that lives with the
 # SparseDriveV2 harness rather than under SparseDrive/work_dirs.
 set -u
-CLEAN=/home/tejan/lwm-rl/.wtc/worktrees/sd-clean/SparseDrive
+CLEAN=/home/tejan/lwm-rl/SparseDrive
 EV=/home/tejan/lwm-rl/SparseDrive/work_dirs/navsim_eval
 CACHE=/home/tejan/lwm-rl/SparseDriveV2/exp/metric_cache_navtestv2
 LP_PY=/home/tejan/miniconda3/envs/lilypad/bin/python

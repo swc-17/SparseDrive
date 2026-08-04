@@ -10,7 +10,7 @@
 # Inference is already done on the cluster, so this only re-scores the
 # downloaded trajectory pickles.
 set -u
-CLEAN=/home/tejan/lwm-rl/.wtc/worktrees/sd-clean/SparseDrive
+CLEAN=/home/tejan/lwm-rl/SparseDrive
 EV=/home/tejan/lwm-rl/SparseDrive/work_dirs/navsim_eval
 LP_PY=/home/tejan/miniconda3/envs/lilypad/bin/python
 cd "$CLEAN"
