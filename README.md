@@ -36,6 +36,44 @@ Provenance: the decision rests on the declutter experiment in
 standalone geometric planner over frozen stage-1 perception (`geo_planner/`)
 matched its image-feature control (L2 0.367 +/- 0.004 vs 0.361 +/- 0.010).
 
+### The two flags
+
+Both live under `model.head.motion_plan_head`. **Stock upstream default is
+`geometric_inputs=False`**, i.e. image features, so geometry-only is opt-in.
+
+| Flag | Geometry-only (V1, V1.5) | Image features (stock, controls) |
+| --- | --- | --- |
+| `geometric_inputs` | `True` | `False` (default) |
+| `instance_queue.use_cam_ego_feature` | `False` | `True` (default) |
+
+They are coupled, not independent. `MotionPlanningHead.__init__` asserts that
+`geometric_inputs=True` implies `use_cam_ego_feature=False`, because leaving the
+ego CNN built but unused creates DDP unused parameters. Set one and you must set
+the other.
+
+```python
+# enable geometry-only (this is what stage2_v6_geoinput.py does)
+model = dict(head=dict(motion_plan_head=dict(
+    geometric_inputs=True,
+    instance_queue=dict(use_cam_ego_feature=False),
+)))
+```
+
+Or override at the command line without touching a config, which is how to turn
+an existing geometry-only config back into its image-feature control:
+
+```bash
+--cfg-options \
+  model.head.motion_plan_head.geometric_inputs=False \
+  model.head.motion_plan_head.instance_queue.use_cam_ego_feature=True
+```
+
+One constraint specific to V1.5: the trajectory vocabulary planner **requires**
+`geometric_inputs=True` and raises `ValueError: trajectory_vocab requires
+geometric_inputs=True` otherwise, so V1.5 cannot be flipped to image features by
+these flags alone. Its image-feature control is a separate model, not in this
+tree; on NAVSIM the control for the geometry-only change is the V1 `imgfeat` run.
+
 ## Model zoo
 
 All paths are absolute on the research box. `$LWM = /home/tejan/lwm-rl`,
@@ -89,6 +127,106 @@ anchors, frame tars and metric caches under `$S3/navsim/sparsedrive/`.
 scorers import its `navsim` package and read its pinned metric caches. It must
 sit at commit `94d01a6`.
 
+## Training
+
+Two envs, and they are not interchangeable: **`sparsedrive310`** has the mm-stack
+and runs all training and inference; **`lilypad`** has the navsim/nuplan stack
+and runs only NAVSIM scoring. No single env has both.
+
+Always launch through `tools/train_pyfocal.py`, not `tools/train.py`. It swaps
+mmcv's `sigmoid_focal_loss` CUDA extension for a numerically equivalent pure
+PyTorch implementation, because the mmcv build here ships without that op. It
+then delegates to `train.py` unchanged, so every flag is the same. Both local
+and cluster runs go through this wrapper so they share one code path.
+
+Training is two-stage, as upstream: stage 1 trains perception (detection, map,
+tracking), stage 2 adds the motion and planning heads and initialises from the
+stage-1 weights via `load_from`. **Stage 2 is where the geometry-only planner
+lives; stage 1 is unaffected by these flags.**
+
+```bash
+conda activate sparsedrive310
+SD=tools/train_pyfocal.py
+```
+
+### V1 on nuScenes (geometry-only)
+
+Stage 2 only. It initialises from the official stage-1 checkpoint, so there is
+no stage 1 to run yourself: place `ckpt/sparsedrive_stage1.pth` (the upstream
+release) and go. 10 epochs x 586 iters = 5,860, giving `iter_5860.pth`.
+
+```bash
+# geometry-only (V1)
+bash tools/dist_train.sh projects/configs/declutter/stage2_v6_geoinput.py 8
+
+# image-feature control (V6c), same recipe, one flag pair different
+bash tools/dist_train.sh projects/configs/declutter/stage2_v6c_ctrl.py 8
+```
+
+`dist_train.sh` takes `<config> <num_gpus>` and forwards any extra args to
+`train.py`. To route it through the focal-loss wrapper instead, call it
+directly:
+
+```bash
+python3 -m torch.distributed.launch --nproc_per_node=8 \
+  tools/train_pyfocal.py projects/configs/declutter/stage2_v6_geoinput.py \
+  --launcher pytorch
+```
+
+### V1 on NAVSIM (geometry-only)
+
+Needs a NAVSIM stage 1 first, since no official NAVSIM stage-1 checkpoint
+exists. Stage 1 is 16 GPUs at total batch 128; stage 2 is 3 epochs at total
+batch 32, giving `iter_8703.pth`.
+
+```bash
+# stage 1 (perception on navtrain)
+python3 -m torch.distributed.launch --nproc_per_node=16 \
+  tools/train_pyfocal.py \
+  projects/configs/navsim/sparsedrive_navsim_stage1_full_16g.py --launcher pytorch
+
+# stage 2, geometry-only (A).  Point load_from at a stage-1 result; the
+# already-trained one is work_dirs/navsim_stage1_eval/ckpts/.
+python3 -m torch.distributed.launch --nproc_per_node=8 \
+  tools/train_pyfocal.py \
+  projects/configs/navsim/sparsedrive_navsim_stage2_geoinput_full.py \
+  --launcher pytorch \
+  --cfg-options load_from=work_dirs/navsim_stage1_eval/ckpts/navsim_stage1_full_16g_iter_21750.pth
+
+# stage 2, image-feature control (imgfeat)
+python3 -m torch.distributed.launch --nproc_per_node=8 \
+  tools/train_pyfocal.py \
+  projects/configs/navsim/sparsedrive_navsim_stage2_imgfeat_full.py \
+  --launcher pytorch
+```
+
+### V1.5 on NAVSIM (trajectory vocabulary + metric head)
+
+Same NAVSIM stage 1, then the vocabulary planner. Its config chain is
+`vocab_metric_full` -> `vocab_full` -> `geoinput_full`, so it inherits the
+geometry-only planner rather than re-declaring it. Stage 1 is read from
+`$SPARSEDRIVE_STAGE1_CHECKPOINT` (a config default, not a CLI flag), and the
+vocabulary anchors in `data/kmeans/sparsedrive_v2/` must be present.
+
+```bash
+# defaults to this same path inside the config; export only to override it
+export SPARSEDRIVE_STAGE1_CHECKPOINT=$LWM/SparseDrive/work_dirs/navsim_stage1_eval/ckpts/navsim_stage1_full_16g_iter_21750.pth
+
+# single node
+python3 -m torch.distributed.launch --nproc_per_node=8 \
+  tools/train_pyfocal.py \
+  projects/configs/navsim/sparsedrive_navsim_stage2_vocab_metric_full.py \
+  --launcher pytorch
+
+# 2 nodes / 16 GPUs, same total batch 32, doubles CPU scoring throughput
+# (the PDM metric head runs scoring pools per rank)
+projects/configs/navsim/sparsedrive_navsim_stage2_vocab_metric_16g.py
+```
+
+`sparsedrive_navsim_stage2_vocab_full.py` is the vocabulary planner without the
+metric re-ranking head; `vocab_metric_full` adds it. The shipped V1.5 checkpoint
+is the metric variant.
+
 ## Evaluating
 
 NAVSIM has three protocols; never mix their caches, since the v1 pickles
@@ -100,8 +238,78 @@ deserialize `navsim.navsim_v1.*` classes.
 | navtest v2 EPDMS | `navsim_agent/score_epdms_navtest_v2.py` | `metric_cache_navtestv2` | 12,146 |
 | navhard two-stage EPDMS | `navsim_agent/score_epdms_two_stage.py` | `metric_cache_navhard2s_full` | 5,912 |
 
-Inference runs in the `sparsedrive310` env, scoring in `lilypad` (no single env
-has both the mm-stack and the navsim/nuplan stack). On the cluster:
+Inference runs in the `sparsedrive310` env, scoring in `lilypad`.
+
+Reproduced numbers for everything below, checked against the values pinned
+before the refactor, are in
+[docs/sd_clean_reproduction_report.md](docs/sd_clean_reproduction_report.md).
+
+### nuScenes: detection, map and planning in one pass
+
+`tools/test.py <config> <checkpoint> --eval bbox`. The protocol that makes the
+models comparable to the official checkpoint is 6-step, `withmap` infos, and
+**rescore off** — collision rescoring is on by default upstream and inflates
+planning, so leave it off for any comparison:
+
+```bash
+python tools/test.py \
+  projects/configs/declutter/stage2_v6_geoinput.py \
+  work_dirs/stage2_v6_geoinput_seed0/iter_5860.pth \
+  --eval bbox --cfg-options \
+    evaluation.eval_mode.with_det=True \
+    evaluation.eval_mode.with_map=True \
+    evaluation.eval_mode.with_planning=True \
+    evaluation.eval_mode.with_tracking=False \
+    evaluation.eval_mode.with_motion=False \
+    model.head.motion_plan_head.planning_decoder.use_rescore=False
+```
+
+Evaluate the official checkpoint through `stage2_v6c_ctrl.py`: it is stock
+architecture plus `withmap` infos, so it loads the released weights directly and
+holds the eval protocol fixed.
+
+Read the results from stdout or the run log, not from wandb. Detection prints
+`mAP:` and `NDS:`, map prints per-class APs and the mean as `mAP_normal=`, and
+planning prints `L2:` and `obj_box_col:`. The cluster driver's scraper captures
+only the planning table, so det/map are log-only.
+
+Multi-GPU: `bash tools/dist_test.sh <config> <checkpoint> <num_gpus>`.
+
+### NAVSIM: inference, then scoring
+
+Two steps in two envs. Inference writes a trajectory pickle; scoring consumes it.
+This split is why a failed scoring run never costs you the GPU time.
+
+```bash
+# 1. inference (sparsedrive310).  --frames for navhard, --infos for navtest.
+python -m navsim_agent.run_inference_frames \
+  --config projects/configs/navsim/sparsedrive_navsim_stage2_geoinput_full.py \
+  --checkpoint work_dirs/navsim_stage2_geoinput_full_16g/iter_8703.pth \
+  --frames work_dirs/navsim_eval/frames_navhard2s.pkl \
+  --output work_dirs/navsim_eval/trajs_a_navhard2s.pkl
+
+# 2. scoring (lilypad env), one of the three protocols
+python navsim_agent/score_epdms_two_stage.py \
+  --agent traj:$PWD/work_dirs/navsim_eval/trajs_a_navhard2s.pkl \
+  --split navhard_two_stage \
+  --metric-cache $PWD/work_dirs/navsim_eval/metric_cache_navhard2s_full \
+  --worker ray_distributed_no_torch \
+  --run-tag a_navhard2s
+```
+
+`--agent` also takes `human` or `constant_velocity` for sanity baselines. Add
+`--require-epdms --expected-tokens N` to fail closed rather than silently score a
+partial run. Workers: `sequential` is deterministic and fine at navmini scale,
+`ray_distributed_no_torch` for full navtest/navhard.
+
+For the two columns that already have wired scripts:
+
+```bash
+bash lilypad_config/navsim_eval/score_navhard_local.sh
+bash lilypad_config/navsim_eval/score_navtest_v2_local.sh
+```
+
+### On the cluster
 
 ```bash
 bash lilypad_config/navsim_eval/submit.sh evalclean_
@@ -112,6 +320,19 @@ so that key is what points the cluster at a given worktree. nuScenes evals go
 through `lilypad_entrypoint_nuscenes.eval_entrypoint_fn` (N parallel
 `tools/test.py` runs, one per GPU); NAVSIM through
 `lilypad_entrypoint_navsim.eval_entrypoint_fn`.
+
+Two things that will bite otherwise:
+
+- Declare `num_gpus` inside `entrypoint_fn_config`, not only under
+  `cluster_resources`. The eval driver reads it from the config block with a
+  default of 1, so any `num_shards > 1` dies in validation before staging with
+  `num_shards must be between one and num_gpus`.
+- **Only navtest v1 PDMS scores on the cluster.** navhard scoring calls
+  `ray.init()` with explicit resources inside the job's own Ray cluster and dies
+  with `When connecting to an existing cluster, num_cpus and num_gpus must not be
+  provided`; navtest v2 has no cluster mode at all. For both, let the cluster do
+  inference and score locally from the exported trajectories, which takes about
+  5 minutes per model.
 
 ---
 
