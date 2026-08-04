@@ -1,0 +1,81 @@
+# V1 geometry-only (A), navhard two-stage EPDMS, from the sd-clean tree.
+# Reproduction target: 0.1917 combined (s1 0.5258 / s2 0.3464).
+name: sd_evalclean_navhard_a
+model_identifier: other.training.sparsedrive.navsim.v1
+cluster_resources:
+  num_gpus: 8
+  gpu_machine_type: a100.8
+  preemptible: when_quota_full
+  customer_resource: research
+  allowed_regions:
+  - us-chicago-1
+workload_variant_config:
+  workload_type: generic
+  entrypoint_fn: lilypad_entrypoint_navsim.eval_entrypoint_fn
+  entrypoint_fn_config:
+    mode: epdms_two_stage
+    num_gpus: 8
+    num_shards: 8
+    split: navhard_two_stage
+    config_file: projects/configs/navsim/sparsedrive_navsim_stage2_geoinput_full.py
+    checkpoint_s3: s3://research-datasets-chicago/users/tejan/navsim/sparsedrive/work_dirs/navsim_stage2_geoinput_full_16g/iter_8703.pth
+    run_tag: clean_a_iter8703_navhard2s
+    results_s3_output: s3://research-datasets-chicago/users/tejan/navsim/sparsedrive/eval_results/sd_clean/a_iter8703/navhard_two_stage/
+    frame_tars_s3: s3://research-datasets-chicago/users/tejan/navsim/sparsedrive/eval_frames/navhard2s_original_frames/
+    frames_pkl_s3: s3://research-datasets-chicago/users/tejan/navsim/sparsedrive/eval_frames/frames_navhard2s.pkl
+    metric_cache_s3: s3://research-datasets-chicago/users/tejan/navsim/sparsedrive/eval_caches/metric_cache_navhard2s_full/
+    navsim_logs_s3: s3://research-datasets-chicago/users/tejan/navsim/navsim_logs/test/test/
+    sdv2_snapshot_s3: s3://research-datasets-chicago/users/tejan/navsim/sparsedrive/eval_env/sparsedrivev2_94d01a6.tar.gz
+    eval_env_s3: s3://research-datasets-chicago/users/tejan/navsim/sparsedrive/eval_env/lilypad_eval_env.tar.gz
+    maps_s3: s3://research-datasets-chicago/users/tejan/navsim/maps/
+    stage_files:
+    - [data/kmeans/navtrain/kmeans_det_900_navsim.npy, data/kmeans/kmeans_det_900_navsim.npy]
+    - [data/kmeans/navtrain/kmeans_map_100_navsim.npy, data/kmeans/kmeans_map_100_navsim.npy]
+    - [data/kmeans/navtrain/kmeans_motion_6_navsim.npy, data/kmeans/kmeans_motion_6_navsim.npy]
+    - [data/kmeans/navtrain/kmeans_plan_6_navsim.npy, data/kmeans/kmeans_plan_6_navsim.npy]
+    extra_sync_s3:
+    - - s3://research-datasets-chicago/users/tejan/navsim/navhard_two_stage/navhard_two_stage/sensor_blobs/
+      - navhard_two_stage/sensor_blobs
+    - - s3://research-datasets-chicago/users/tejan/navsim/navhard_two_stage/navhard_two_stage/synthetic_scene_pickles/
+      - navhard_two_stage/synthetic_scene_pickles
+    epdms_worker: ray_distributed_no_torch
+runtime_environment:
+  code_assets:
+    root_directory: /home/tejan/lwm-rl/SparseDrive
+    pip_requirements_path: requirements_lilypad.txt
+    max_file_size_mb: 50
+    regex_excludes:
+    - ^/\.git/
+    - /__pycache__/
+    - \.egg-info/
+    - \.so$
+    - \.pyc$
+    - \.pth$
+    - \.pkl$
+    - \.tar$
+    - \.tar\.gz$
+    - \.log$
+    - \.png$
+    - \.jpg$
+    - \.mp4$
+    - ^/data/
+    - ^/work_dirs/
+    - ^/ckpt/
+    - ^/wandb/
+    - ^/vis/
+    - ^/logs/
+  required_environment_variables:
+  - AWS_ACCESS_KEY_ID
+  - AWS_SECRET_ACCESS_KEY
+  constant_environment_variables:
+    AWS_ENDPOINT_URL: https://idskhu5vqvtl.compat.objectstorage.us-chicago-1.oraclecloud.com
+    AWS_ENDPOINT_URL_S3: https://idskhu5vqvtl.compat.objectstorage.us-chicago-1.oraclecloud.com
+    AWS_DEFAULT_REGION: us-chicago-1
+    AWS_REGION: us-chicago-1
+    AWS_REQUEST_CHECKSUM_CALCULATION: when_required
+    AWS_RESPONSE_CHECKSUM_VALIDATION: when_required
+    TORCH_CUDA_ARCH_LIST: '8.0'
+    PATH: /usr/local/cuda/bin:$PATH
+    LD_LIBRARY_PATH: /usr/local/cuda/lib64:$LD_LIBRARY_PATH
+    PYTHONUNBUFFERED: '1'
+    HYDRA_FULL_ERROR: '1'

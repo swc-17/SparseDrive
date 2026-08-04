@@ -136,17 +136,24 @@ class HierarchicalPlanningDecoder(object):
         anchor_queue = planning_output["anchor_queue"]
         anchor_queue = torch.stack(anchor_queue, dim=2)
         period = planning_output["period"]
+        # Ego instance representation for C-JEPA (optional — present when
+        # MotionPlanningHead has the cjepa-encoder-export patch applied).
+        ego_feat  = planning_output.get("ego_feature")       # (B, 1, 256) or None
+        ego_aemb  = planning_output.get("ego_anchor_embed")  # (B, 1, 256) or None
+
         output = []
         for i, (cls, pred) in enumerate(zip(classification, prediction)):
-            output.append(
-                {
-                    "planning_score": cls.sigmoid().cpu(),
-                    "planning": pred.cpu(),
-                    "final_planning": final_planning[i].cpu(),
-                    "ego_period": period[i].cpu(),
-                    "ego_anchor_queue": decode_box(anchor_queue[i]).cpu(),
-                }
-            )
+            entry = {
+                "planning_score": cls.sigmoid().cpu(),
+                "planning": pred.cpu(),
+                "final_planning": final_planning[i].cpu(),
+                "ego_period": period[i].cpu(),
+                "ego_anchor_queue": decode_box(anchor_queue[i]).cpu(),
+            }
+            if ego_feat is not None:
+                entry["ego_feature"]      = ego_feat[i].cpu()   # (1, 256)
+                entry["ego_anchor_embed"] = ego_aemb[i].cpu()   # (1, 256)
+            output.append(entry)
 
         return output
 

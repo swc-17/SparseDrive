@@ -79,3 +79,50 @@ class MotionPlanningRefinementModule(BaseModule):
         plan_reg = self.plan_reg_branch(plan_query).reshape(bs, 1, 3 * self.ego_fut_mode, self.ego_fut_ts, 2)
         planning_status = self.plan_status_branch(ego_feature + ego_anchor_embed)
         return motion_cls, motion_reg, plan_cls, plan_reg, planning_status
+
+
+@PLUGIN_LAYERS.register_module()
+class MotionOnlyRefinementModule(BaseModule):
+    """V1 agent-motion/status refinement when planning uses the V2 vocabulary."""
+
+    def __init__(self, embed_dims=256, fut_ts=12, fut_mode=6):
+        super().__init__()
+        self.fut_ts = fut_ts
+        self.fut_mode = fut_mode
+        self.motion_cls_branch = nn.Sequential(
+            *linear_relu_ln(embed_dims, 1, 2),
+            Linear(embed_dims, 1),
+        )
+        self.motion_reg_branch = nn.Sequential(
+            nn.Linear(embed_dims, embed_dims),
+            nn.ReLU(),
+            nn.Linear(embed_dims, embed_dims),
+            nn.ReLU(),
+            nn.Linear(embed_dims, fut_ts * 2),
+        )
+        self.plan_status_branch = nn.Sequential(
+            nn.Linear(embed_dims, embed_dims),
+            nn.ReLU(),
+            nn.Linear(embed_dims, embed_dims),
+            nn.ReLU(),
+            nn.Linear(embed_dims, 10),
+        )
+
+    def init_weight(self):
+        nn.init.constant_(
+            self.motion_cls_branch[-1].bias, bias_init_with_prob(0.01)
+        )
+
+    def forward(self, motion_query, plan_query, ego_feature, ego_anchor_embed):
+        del plan_query
+        batch_size, num_anchor = motion_query.shape[:2]
+        motion_cls = self.motion_cls_branch(motion_query).squeeze(-1)
+        motion_reg = self.motion_reg_branch(motion_query).reshape(
+            batch_size,
+            num_anchor,
+            self.fut_mode,
+            self.fut_ts,
+            2,
+        )
+        planning_status = self.plan_status_branch(ego_feature + ego_anchor_embed)
+        return motion_cls, motion_reg, None, None, planning_status

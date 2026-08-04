@@ -1,0 +1,7 @@
+# Driver-env deps for Lilypad jobs (training itself runs in the packed conda env).
+--extra-index-url https://download.pytorch.org/whl/cu128
+torch==2.8.0+cu128
+boto3>=1.28.0
+pyquaternion==0.9.9
+prettytable==3.7.0
+aioboto3

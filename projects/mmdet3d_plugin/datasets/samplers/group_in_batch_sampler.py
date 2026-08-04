@@ -148,9 +148,19 @@ class GroupInBatchSampler(Sampler):
                             ::-1
                         ]
                     if self.dataset.keep_consistent_seq_aug:
-                        self.aug_per_local_sample[
-                            local_sample_idx
-                        ] = self.dataset.get_augmentation()
+                        # Multi-source concat datasets draw group-appropriate
+                        # augmentation (per-dataset source geometry differs,
+                        # e.g. nuScenes 1600x900 vs NAVSIM 1920x1080).
+                        if hasattr(self.dataset, "get_augmentation_for_group"):
+                            self.aug_per_local_sample[
+                                local_sample_idx
+                            ] = self.dataset.get_augmentation_for_group(
+                                new_group_idx
+                            )
+                        else:
+                            self.aug_per_local_sample[
+                                local_sample_idx
+                            ] = self.dataset.get_augmentation()
 
                 if not self.dataset.keep_consistent_seq_aug:
                     self.aug_per_local_sample[

@@ -40,6 +40,8 @@ class SparseBox3DDecoder(object):
         instance_id=None,
         quality=None,
         output_idx=-1,
+        instance_feature=None,
+        anchor_embed=None,
     ):
         squeeze_cls = instance_id is not None
 
@@ -104,4 +106,16 @@ class SparseBox3DDecoder(object):
                 if self.score_threshold is not None:
                     ids = ids[mask[i]]
                 output[-1]["instance_ids"] = ids
+            # Pass through instance_feature and anchor_embed with same index selection
+            # so downstream C-JEPA dataset builder can use them directly.
+            if instance_feature is not None:
+                feat = instance_feature[i, indices[i] // num_cls]
+                if self.score_threshold is not None:
+                    feat = feat[mask[i]]
+                output[-1]["instance_feature"] = feat
+            if anchor_embed is not None:
+                emb = anchor_embed[i, indices[i] // num_cls]
+                if self.score_threshold is not None:
+                    emb = emb[mask[i]]
+                output[-1]["anchor_embed"] = emb
         return output

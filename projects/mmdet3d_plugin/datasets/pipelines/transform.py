@@ -107,7 +107,9 @@ class NuScenesSparse4DAdaptor(object):
             'gt_ego_fut_trajs',
             'gt_ego_fut_masks',
             'gt_ego_fut_cmd',
+            'gt_ego_fut_cmd_valid',  # NAVSIM: 0 for 'unknown' commands
             'ego_status',
+            'cam_valid_mask',  # combined training: 0 for zero-padded views
         ]:
             if key not in input_dict:
                 continue
@@ -120,6 +122,54 @@ class NuScenesSparse4DAdaptor(object):
     ) -> np.ndarray:
         limited_val = val - np.floor(val / period + offset) * period
         return limited_val
+
+
+@PIPELINES.register_module()
+class PadMultiViewImage(object):
+    """Pad the multi-view image list to a fixed camera count (combined
+    NAVSIM + nuScenes training: nuScenes 6 cams -> num_cams=8).
+
+    Appends all-zero images (same HxW as view 0) plus projection-invalid
+    markers, and emits ``cam_valid_mask`` (float32, (num_cams,), 1=real /
+    0=padded). Padded views get an all-zero lidar2img/lidar2cam (finite
+    projections: z clamps to 1e-5 downstream, no NaNs) and a copy of view 0's
+    intrinsics (keeps the `focal` vector well-defined). Must run right after
+    image loading, BEFORE ResizeCropFlipImage / depth-map generation, so the
+    per-view lists stay aligned through the whole pipeline. A no-op emitting
+    an all-ones mask when the sample already has num_cams views (NAVSIM).
+    """
+
+    def __init__(self, num_cams=8):
+        self.num_cams = num_cams
+
+    def __call__(self, results):
+        num_real = len(results["img"])
+        assert num_real <= self.num_cams, (
+            f"sample has {num_real} views > num_cams={self.num_cams}"
+        )
+        n_pad = self.num_cams - num_real
+        if n_pad > 0:
+            zero_img = np.zeros_like(results["img"][0])
+            for _ in range(n_pad):
+                results["img"].append(zero_img.copy())
+                results["lidar2img"].append(np.zeros((4, 4)))
+                if "lidar2cam" in results:
+                    results["lidar2cam"].append(np.zeros((4, 4)))
+                if "cam_intrinsic" in results:
+                    results["cam_intrinsic"].append(
+                        results["cam_intrinsic"][0].copy()
+                    )
+                if "cam_distortion" in results:
+                    results["cam_distortion"].append(
+                        np.zeros_like(results["cam_distortion"][0])
+                    )
+        results["cam_valid_mask"] = np.array(
+            [1.0] * num_real + [0.0] * n_pad, dtype=np.float32
+        )
+        return results
+
+    def __repr__(self):
+        return f"{self.__class__.__name__}(num_cams={self.num_cams})"
 
 
 @PIPELINES.register_module()

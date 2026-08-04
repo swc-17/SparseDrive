@@ -23,6 +23,8 @@ class SparsePoint3DDecoder(object):
         instance_id=None,
         quality=None,
         output_idx=-1,
+        instance_feature=None,
+        anchor_embed=None,
     ):
         bs, num_pred, num_cls = cls_scores[-1].shape
         cls_scores = cls_scores[-1].sigmoid()
@@ -43,11 +45,21 @@ class SparsePoint3DDecoder(object):
                 scores = scores[mask[i]]
                 pts = pts[mask[i]]
 
-            output.append(
-                {
-                    "vectors": [vec.detach().cpu().numpy() for vec in pts],
-                    "scores": scores.detach().cpu().numpy(),
-                    "labels": category_ids.detach().cpu().numpy(),
-                }
-            )
+            entry = {
+                "vectors": [vec.detach().cpu().numpy() for vec in pts],
+                "scores": scores.detach().cpu().numpy(),
+                "labels": category_ids.detach().cpu().numpy(),
+            }
+            # Pass through map instance_feature and anchor_embed for C-JEPA
+            if instance_feature is not None:
+                feat = instance_feature[i, indices[i] // num_cls]
+                if self.score_threshold is not None:
+                    feat = feat[mask[i]]
+                entry["map_instance_feature"] = feat.detach()
+            if anchor_embed is not None:
+                emb = anchor_embed[i, indices[i] // num_cls]
+                if self.score_threshold is not None:
+                    emb = emb[mask[i]]
+                entry["map_anchor_embed"] = emb.detach()
+            output.append(entry)
         return output

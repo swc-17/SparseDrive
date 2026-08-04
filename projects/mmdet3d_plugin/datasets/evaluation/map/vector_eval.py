@@ -187,8 +187,9 @@ class VectorEvaluate(object):
                 scores_by_cls[label].append(score)
 
             for label in self.id2cat.keys():
-                new_sample = (vectors_by_cls[label], scores_by_cls[label], gt[label])
-                num_gts[label] += len(gt[label])
+                gt_label = gt.get(label, [])
+                new_sample = (vectors_by_cls[label], scores_by_cls[label], gt_label)
+                num_gts[label] += len(gt_label)
                 num_preds[label] += len(scores_by_cls[label])
                 samples_by_cls[label].append(new_sample)
 

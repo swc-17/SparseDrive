@@ -58,6 +58,7 @@ class DeformableFeatureAggregation(BaseModule):
         use_deformable_func=False,
         use_camera_embed=False,
         residual_mode="add",
+        use_cam_valid_mask=False,
     ):
         super(DeformableFeatureAggregation, self).__init__()
         if embed_dims % num_groups != 0:
@@ -76,6 +77,14 @@ class DeformableFeatureAggregation(BaseModule):
         self.use_deformable_func = use_deformable_func
         self.attn_drop = attn_drop
         self.residual_mode = residual_mode
+        # Combined NAVSIM+nuScenes training: zero-padded camera views carry an
+        # explicit per-view valid mask (metas["cam_valid_mask"], (bs, num_cams)
+        # with 1=real view / 0=padded view). When enabled, the softmaxed
+        # sampling weights of invalid views are zeroed, so padded views
+        # contribute EXACTLY zero to the aggregated features (not learned
+        # rejection). Default False: existing single-dataset configs are
+        # bit-identical.
+        self.use_cam_valid_mask = use_cam_valid_mask
         self.proj_drop = nn.Dropout(proj_drop)
         kps_generator["embed_dims"] = embed_dims
         self.kps_generator = build_from_cfg(kps_generator, PLUGIN_LAYERS)
@@ -172,9 +181,28 @@ class DeformableFeatureAggregation(BaseModule):
             )
             feature = feature[:, :, None] + camera_embed[:, None]
 
+        logits = self.weights_fc(feature).reshape(
+            bs, num_anchor, -1, self.num_groups
+        )
+        cam_valid_mask = None
+        if self.use_cam_valid_mask and metas is not None:
+            cam_valid_mask = metas.get("cam_valid_mask")
+        if cam_valid_mask is not None:
+            # Mask BEFORE the softmax so invalid (padded) views neither
+            # receive weight nor perturb the normalization of real views;
+            # dim -2 is cam-major (cams, levels, pts) per the reshape below.
+            per_cam = logits.shape[2] // self.num_cams
+            invalid = (
+                (cam_valid_mask == 0)
+                .reshape(bs, 1, self.num_cams, 1, 1)
+                .expand(bs, 1, self.num_cams, per_cam, 1)
+                .reshape(bs, 1, -1, 1)
+            )
+            logits = logits.masked_fill(
+                invalid, torch.finfo(logits.dtype).min
+            )
         weights = (
-            self.weights_fc(feature)
-            .reshape(bs, num_anchor, -1, self.num_groups)
+            logits
             .softmax(dim=-2)
             .reshape(
                 bs,
@@ -185,6 +213,11 @@ class DeformableFeatureAggregation(BaseModule):
                 self.num_groups,
             )
         )
+        if cam_valid_mask is not None:
+            # belt-and-suspenders: exact zeros for padded views
+            weights = weights * cam_valid_mask.to(weights.dtype).reshape(
+                bs, 1, self.num_cams, 1, 1, 1
+            )
         if self.training and self.attn_drop > 0:
             mask = torch.rand(
                 bs, num_anchor, self.num_cams, 1, self.num_pts, 1

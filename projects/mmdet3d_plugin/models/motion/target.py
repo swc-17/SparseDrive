@@ -91,6 +91,17 @@ class PlanningTarget():
         gt_reg_target = gt_reg_target.unsqueeze(1)
         gt_reg_mask = gt_reg_mask.unsqueeze(1)
 
+        # NAVSIM: samples with an 'unknown' driving command are mapped to
+        # 'straight' for tensor-shape validity but carry
+        # gt_ego_fut_cmd_valid=0 — they must contribute zero planner
+        # classification AND regression loss. Zeroing gt_reg_mask does both:
+        # reg_weight goes to zero and cls_weight = gt_reg_mask.any(-1) -> 0.
+        cmd_valid = data.get('gt_ego_fut_cmd_valid')
+        if cmd_valid is not None:
+            gt_reg_mask = gt_reg_mask * cmd_valid.reshape(-1, 1, 1).to(
+                gt_reg_mask.dtype
+            )
+
         bs = reg_pred.shape[0]
         bs_indices = torch.arange(bs, device=reg_pred.device)
         cmd = data['gt_ego_fut_cmd'].argmax(dim=-1)

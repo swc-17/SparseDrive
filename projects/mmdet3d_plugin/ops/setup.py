@@ -19,7 +19,7 @@ def make_cuda_ext(
 ):
 
     define_macros = []
-    extra_compile_args = {"cxx": [] + extra_args}
+    extra_compile_args = {"cxx": ["-std=c++17"] + extra_args}
 
     if torch.cuda.is_available() or os.getenv("FORCE_CUDA", "0") == "1":
         define_macros += [("WITH_CUDA", None)]
@@ -28,6 +28,8 @@ def make_cuda_ext(
             "-D__CUDA_NO_HALF_OPERATORS__",
             "-D__CUDA_NO_HALF_CONVERSIONS__",
             "-D__CUDA_NO_HALF2_OPERATORS__",
+            "-DCCCL_IGNORE_DEPRECATED_CPP_DIALECT",
+            "-std=c++20",
         ]
         sources += sources_cuda
     else:

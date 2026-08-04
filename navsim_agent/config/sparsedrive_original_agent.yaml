@@ -1,0 +1,23 @@
+# Hydra agent config for the original-SparseDrive NAVSIM wrapper.
+#
+# Mirrors SparseDriveV2's agent registration pattern
+# (navsim/planning/script/config/common/agent/*.yaml). To use with the
+# hydra scoring entrypoints, symlink/copy this file into
+#   <SparseDriveV2>/navsim/planning/script/config/common/agent/
+# at run time (do NOT commit it there) and make sure `navsim_agent` is on
+# PYTHONPATH in an environment that has BOTH the navsim/nuplan stack and
+# the SparseDrive mm-stack. While no such combined local env exists, use
+# the two-process flow instead (run_inference_infos.py + score_pdm_v1.py /
+# score_epdms_two_stage.py) — see docs/navsim_eval_openloop.md.
+_target_: navsim_agent.agent.SparseDriveNavsimAgent
+_convert_: 'all'
+
+trajectory_sampling:
+  _target_: nuplan.planning.simulation.trajectory.trajectory_sampling.TrajectorySampling
+  _convert_: 'all'
+  time_horizon: 4
+  interval_length: 0.5
+
+config_path: /home/tejan/lwm-rl/SparseDrive/projects/configs/navsim/sparsedrive_navsim_stage2_geoinput.py
+checkpoint_path: null
+device: cuda:0
