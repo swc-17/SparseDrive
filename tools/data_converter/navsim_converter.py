@@ -342,6 +342,12 @@ def convert_command(driving_command):
     return np.array(cmd, dtype=np.float32), np.float32(valid)
 
 
+# Optional prefix that makes cam data_paths absolute in the output infos
+# (set via --blob-root; used for exported sims whose blobs live outside the
+# dataset root the training configs point at).
+BLOB_ROOT = None
+
+
 def convert_cams(fr):
     """Fixed-order camera dict with SparseDrive-frame extrinsics.
 
@@ -351,14 +357,23 @@ def convert_cams(fr):
     l2e = np.asarray(fr["lidar2ego"], dtype=np.float64)
     assert np.abs(l2e - np.eye(4)).max() < 1e-9, "lidar2ego is not identity"
     cams = OrderedDict()
-    for cam in CAMERA_ORDER:
+    if set(fr["cams"]) == set(CAMERA_ORDER):
+        cam_order = CAMERA_ORDER
+    else:
+        # Non-navsim rig (e.g. native AlpaSim export): keep the exporter's
+        # order, which must already put the front camera at index 0 (the
+        # planning feature path uses cam 0).
+        cam_order = list(fr["cams"])
+        assert "front" in cam_order[0], f"cam 0 must be a front camera: {cam_order}"
+    for cam in cam_order:
         c = fr["cams"][cam]
         rot_sd = C3 @ np.asarray(c["sensor2lidar_rotation"], dtype=np.float64)
         trans_sd = C3 @ np.asarray(
             c["sensor2lidar_translation"], dtype=np.float64
         )
         cams[cam] = dict(
-            data_path=c["data_path"],
+            data_path=(os.path.join(BLOB_ROOT, c["data_path"])
+                       if BLOB_ROOT else c["data_path"]),
             sensor2lidar_rotation=rot_sd,
             sensor2lidar_translation=trans_sd,
             cam_intrinsic=np.asarray(c["cam_intrinsic"], dtype=np.float64),
@@ -444,6 +459,41 @@ def geom2anno(map_geoms):
         label = MAP_CLASSES.index(cls)
         vectors[label] = [np.array(geom.coords) for geom in geom_list]
     return vectors
+
+
+def embedded_map_annos(fr):
+    """Local vector map from frame-embedded polylines (AlpaSim exports).
+
+    Frames exported by tools/navsim_from_alpasim carry ``map_annos_nav``:
+    {class name -> [(N, 2) polylines]} already in the NAVSIM ego frame
+    (extracted from the scene artifact's trajdata VectorMap — simulated
+    scenes have no nuPlan map API). Rotate into the SparseDrive frame and
+    clip to the same MAP_ROI_SIZE patch the extractor path uses.
+    """
+    from shapely.geometry import LineString, box
+
+    patch = box(
+        -MAP_ROI_SIZE[0] / 2.0, -MAP_ROI_SIZE[1] / 2.0,
+        MAP_ROI_SIZE[0] / 2.0, MAP_ROI_SIZE[1] / 2.0,
+    )
+    annos = {}
+    for cls, lines in fr["map_annos_nav"].items():
+        if cls not in MAP_CLASSES:
+            continue
+        label = MAP_CLASSES.index(cls)
+        out = []
+        for line in lines:
+            pts_sd = np.asarray(line, dtype=np.float64) @ C3[:2, :2].T
+            if len(pts_sd) < 2:
+                continue
+            clipped = LineString(pts_sd).intersection(patch)
+            geoms = getattr(clipped, "geoms", [clipped])
+            for g in geoms:
+                if g.geom_type == "LineString" and len(g.coords) >= 2:
+                    out.append(np.array(g.coords, dtype=np.float64))
+        if out:
+            annos[label] = out
+    return annos
 
 
 def extract_map_annos(map_extractor, fr, g_sd):
@@ -605,7 +655,8 @@ def convert_scene(log_name, window, filt, seq_of, track2ind,
         # maps: local ped_crossing/divider/boundary vectors (labels 0/1/2)
         # in the SD frame, clipped to MAP_ROI_SIZE (empty dict if disabled)
         map_annos=(
-            extract_map_annos(map_extractor, fr, g_sd_cur)
+            embedded_map_annos(fr) if "map_annos_nav" in fr
+            else extract_map_annos(map_extractor, fr, g_sd_cur)
             if map_extractor is not None else {}
         ),
     )
@@ -816,7 +867,8 @@ def convert(data_root, split, filter_name, output, count_only=False,
           f"max {boxes_per_frame.max()}")
     print(f"[info] class counts: {dict(class_counts)}")
 
-    maps_enabled = maps_root is not None
+    # Embedded (AlpaSim) map annos are populated even without a maps_root.
+    maps_enabled = maps_root is not None or any(x["map_annos"] for x in infos)
     map_stats = None
     if maps_enabled:
         per_class = {
@@ -1020,7 +1072,10 @@ def render_overlays(data, data_root, split, out_dir, num=32):
 def main():
     parser = argparse.ArgumentParser(description="NAVSIM -> SparseDrive infos")
     parser.add_argument("--data-root", default="/media/applied/navsim")
-    parser.add_argument("--split", default="mini", choices=["mini", "test", "trainval"])
+    parser.add_argument(
+        "--split", default="mini",
+        help="navsim_logs/<split> subdirectory (mini, test, trainval, or an "
+             "exported split like alpasim_pilot)")
     parser.add_argument("--filter", default="navmini",
                         help="vendored scene filter name "
                              "(navmini/navtest/navtrain)")
@@ -1046,10 +1101,17 @@ def main():
     parser.add_argument("--overlay-dir", default=None,
                         help="also render calibration overlay mosaics here")
     parser.add_argument("--overlay-num", type=int, default=32)
+    parser.add_argument("--blob-root", default=None,
+                        help="prefix cam data_paths with this directory "
+                             "(absolute paths in the output infos; for "
+                             "exported sims outside the training data_root)")
     args = parser.parse_args()
 
     if (args.split_json is None) != (args.split_key is None):
         parser.error("--split-json and --split-key must be given together")
+    if args.blob_root:
+        global BLOB_ROOT
+        BLOB_ROOT = os.path.abspath(args.blob_root)
     data = convert(args.data_root, args.split, args.filter, args.output,
                    count_only=args.count_only,
                    maps_root=None if args.no_maps else args.maps_root,
