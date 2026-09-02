@@ -43,5 +43,30 @@ def _py_sigmoid_focal_loss_ext(pred, target, gamma=2.0, alpha=0.25,
 
 _fl._sigmoid_focal_loss = _py_sigmoid_focal_loss_ext
 
+# mmcv's collect_env probes the CUDA ext for compiler info. The stub ext
+# (this env) raises NotImplementedError on use instead of the ImportError
+# collect_env catches, so report n/a like a genuinely ops-less install.
+import mmcv.ops as _mmcv_ops  # noqa: E402
+
+try:
+    _mmcv_ops.get_compiler_version()
+except NotImplementedError:
+    _mmcv_ops.get_compiler_version = lambda: "n/a (stub mmcv ext)"
+    _mmcv_ops.get_compiling_cuda_version = lambda: "n/a (stub mmcv ext)"
+
+# PyTorch >=2.6 defaults torch.load(weights_only=True). That rejects the
+# legacy tar-format ImageNet ResNet50 we ship (ckpt/resnet50-19c8e357.pth)
+# and older mmcv checkpoints. Lilypad only loads our own S3/local artifacts,
+# so restore the pre-2.6 default unless the caller opts in explicitly.
+_torch_load = torch.load
+
+
+def _torch_load_compat(*args, **kwargs):
+    kwargs.setdefault("weights_only", False)
+    return _torch_load(*args, **kwargs)
+
+
+torch.load = _torch_load_compat
+
 _here = os.path.dirname(os.path.abspath(__file__))
 runpy.run_path(os.path.join(_here, "train.py"), run_name="__main__")

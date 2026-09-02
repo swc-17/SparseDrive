@@ -169,9 +169,7 @@ class SparseBox3DKeyPointsGenerator(BaseModule):
         self.num_learnable_pts = num_learnable_pts
         if fix_scale is None:
             fix_scale = ((0.0, 0.0, 0.0),)
-        self.fix_scale = nn.Parameter(
-            torch.tensor(fix_scale), requires_grad=False
-        )
+        self.fix_scale = np.array(fix_scale)
         self.num_pts = len(self.fix_scale) + num_learnable_pts
         if num_learnable_pts > 0:
             self.learnable_fc = Linear(self.embed_dims, num_learnable_pts * 3)
@@ -190,7 +188,7 @@ class SparseBox3DKeyPointsGenerator(BaseModule):
     ):
         bs, num_anchor = anchor.shape[:2]
         size = anchor[..., None, [W, L, H]].exp()
-        key_points = self.fix_scale * size
+        key_points = anchor.new_tensor(self.fix_scale) * size
         if self.num_learnable_pts > 0 and instance_feature is not None:
             learnable_scale = (
                 self.learnable_fc(instance_feature)

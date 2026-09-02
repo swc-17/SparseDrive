@@ -32,7 +32,7 @@ class VectorEvaluate(object):
         self.dataset = build_dataset(dataset_cfg)
         self.dataloader = build_dataloader(
             self.dataset, samples_per_gpu=1, workers_per_gpu=n_workers, shuffle=False, dist=False)
-        classes = self.dataset.MAP_CLASSES
+        classes = getattr(self.dataset, "map_classes", self.dataset.MAP_CLASSES)
         self.cat2id = {cls: i for i, cls in enumerate(classes)}
         self.id2cat = {v: k for k, v in self.cat2id.items()}
         self.n_workers = n_workers
@@ -268,7 +268,7 @@ class VectorEvaluate(object):
         for label in self.id2cat.keys():
             for thr in self.thresholds:
                 mAP_normal += result_dict[self.id2cat[label]][f'AP@{thr}']
-        mAP_normal = mAP_normal / 9
+        mAP_normal /= len(self.thresholds) * len(self.id2cat)
 
         print_log(f'mAP_normal = {mAP_normal:.4f}\n', logger=logger)
         # print_log(f'mAP_hard = {mAP_easy:.4f}\n', logger=logger)
