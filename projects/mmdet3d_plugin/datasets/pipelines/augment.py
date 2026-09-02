@@ -23,10 +23,9 @@ class ResizeCropFlipImage(object):
             new_imgs.append(np.array(img).astype(np.float32))
             results["lidar2img"][i] = mat @ results["lidar2img"][i]
             if "cam_intrinsic" in results:
-                results["cam_intrinsic"][i][:3, :3] *= aug_config["resize"]
-                # results["cam_intrinsic"][i][:3, :3] = (
-                #     mat[:3, :3] @ results["cam_intrinsic"][i][:3, :3]
-                # )
+                results["cam_intrinsic"][i][:3, :3] = (
+                    mat[:3, :3] @ results["cam_intrinsic"][i][:3, :3]
+                )
 
         results["img"] = new_imgs
         results["img_shape"] = [x.shape[:2] for x in new_imgs]

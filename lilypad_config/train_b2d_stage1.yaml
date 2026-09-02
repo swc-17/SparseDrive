@@ -1,0 +1,91 @@
+name: sparsedrive_b2d_stage1
+model_identifier: other.training.sparsedrive.bench2drive.v1
+
+cluster_resources:
+  num_gpus: 8
+  gpu_machine_type: a100.8
+  preemptible: when_quota_full
+  customer_resource: research
+  allowed_regions:
+    - us-chicago-1
+
+workload_variant_config:
+  workload_type: generic
+  entrypoint_fn: lilypad_entrypoint_b2d.train_entrypoint_fn
+  entrypoint_fn_config:
+    run_name: "b2d_stage1_v1_a100x8"
+    config_file: "projects/configs/sparsedrive_b2d_stage1.py"
+    num_gpus: 8
+    batch_size: 8
+    num_epochs: 20
+    base_lr: 5.0e-4
+    base_total_batch: 256
+    seed: 0
+    torch_cuda_arch_list: "8.0"
+    stage_threads: 12
+
+  experiment_tracking_values:
+    wandb_values:
+      entity: research
+      project: sparsedrive-b2d
+
+runtime_environment:
+  code_assets:
+    root_directory: /home/tejan/lwm-rl/.git/modules/SparseDrive/.wtc/worktrees/research/b2d-perception
+    pip_requirements_path: requirements_lilypad.txt
+    max_file_size_mb: 50
+    regex_excludes:
+      - "^/\\.git"
+      - "/__pycache__/"
+      - "\\.egg-info/"
+      - "\\.so$"
+      - "\\.pyc$"
+      - "\\.pth$"
+      - "\\.pkl$"
+      - "\\.tar$"
+      - "\\.tar\\.gz$"
+      - "\\.log$"
+      - "\\.png$"
+      - "\\.jpg$"
+      - "\\.mp4$"
+      - "\\.laz$"
+      - "\\.npz$"
+      - "\\.h5$"
+      - "^/data/"
+      - "^/ckpt"
+      - "^/work_dirs/"
+      - "^/wandb/"
+      - "^/vis/"
+      - "^/logs/"
+      - "^/lilypad_logs/"
+      - "^/close_loop_log/"
+      - "^/leaderboard/"
+      - "^/scenario_runner/"
+      - "^/docs/"
+      - "^/assets/"
+
+  required_environment_variables:
+    - WANDB_API_KEY
+    - AWS_ACCESS_KEY_ID
+    - AWS_SECRET_ACCESS_KEY
+
+  constant_environment_variables:
+    AWS_ENDPOINT_URL: "https://idskhu5vqvtl.compat.objectstorage.us-chicago-1.oraclecloud.com"
+    AWS_ENDPOINT_URL_S3: "https://idskhu5vqvtl.compat.objectstorage.us-chicago-1.oraclecloud.com"
+    AWS_DEFAULT_REGION: "us-chicago-1"
+    AWS_REGION: "us-chicago-1"
+    AWS_REQUEST_CHECKSUM_CALCULATION: "when_required"
+    AWS_RESPONSE_CHECKSUM_VALIDATION: "when_required"
+    WANDB_BASE_URL: "https://appliedintuition.wandb.io"
+    PYTHONUNBUFFERED: "1"
+    B2D_VERSION: "trainval"
+    B2D_TRAIN_SAMPLES: "234769"
+    B2D_NUM_GPUS: "8"
+    B2D_SAMPLES_PER_GPU: "8"
+    B2D_DATA_ROOT: "data/bench2drive/"
+    B2D_INFO_ROOT: "data/infos/"
+    B2D_KMEANS_ROOT: "data/kmeans/"
+    B2D_RESNET50_CHECKPOINT: "ckpt/resnet50-19c8e357.pth"
+    B2D_USE_DEFORMABLE_FUNC: "1"
+    WANDB_NAME: "b2d_stage1_v1_a100x8"
+    TORCH_CUDA_ARCH_LIST: "8.0"

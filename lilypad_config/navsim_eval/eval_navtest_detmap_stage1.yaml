@@ -1,0 +1,70 @@
+name: sparsedrive_navsim_stage1_navtest_detmap
+model_identifier: other.eval.sparsedrive.navsim.v1
+
+cluster_resources:
+  num_gpus: 8
+  gpu_machine_type: a100.8
+  preemptible: when_quota_full
+  customer_resource: research
+  allowed_regions:
+    - us-chicago-1
+
+workload_variant_config:
+  workload_type: generic
+  entrypoint_fn: lilypad_entrypoint_navsim_detmap.detmap_entrypoint_fn
+  entrypoint_fn_config:
+    run_name: "navsim_stage1_navtest_detmap_iter21750"
+    config_file: "projects/configs/navsim/sparsedrive_navsim_stage1_eval_navtest.py"
+    checkpoint_s3: "s3://research-datasets-chicago/users/tejan/navsim/sparsedrive/work_dirs/navsim_stage1_full_16g/iter_21750.pth"
+    infos_s3: "s3://research-datasets-chicago/users/tejan/navsim/sparsedrive/data/infos/navsim_infos_navtest.pkl"
+    frame_tars_s3: "s3://research-datasets-chicago/users/tejan/navsim/sparsedrive/eval_frames/navtest_eval_frames/"
+    num_gpus: 8
+    torch_cuda_arch_list: "8.0"
+    stage_files:
+      - [data/kmeans/navtrain/kmeans_det_900_navsim.npy, data/kmeans/kmeans_det_900_navsim.npy]
+      - [data/kmeans/navtrain/kmeans_map_100_navsim.npy, data/kmeans/kmeans_map_100_navsim.npy]
+
+runtime_environment:
+  code_assets:
+    root_directory: /home/tejan/lwm-rl/.git/modules/SparseDrive/.wtc/worktrees/research/b2d-perception
+    pip_requirements_path: requirements_lilypad.txt
+    max_file_size_mb: 50
+    regex_excludes:
+      - "^/\\.git"
+      - "/__pycache__/"
+      - "\\.egg-info/"
+      - "\\.so$"
+      - "\\.pyc$"
+      - "\\.pth$"
+      - "\\.pkl$"
+      - "\\.tar$"
+      - "\\.tar\\.gz$"
+      - "\\.log$"
+      - "\\.png$"
+      - "\\.jpg$"
+      - "\\.mp4$"
+      - "^/data/"
+      - "^/ckpt"
+      - "^/work_dirs/"
+      - "^/wandb/"
+      - "^/vis/"
+      - "^/logs/"
+      - "^/lilypad_logs/"
+      - "^/docs/"
+      - "^/assets/"
+
+  required_environment_variables:
+    - AWS_ACCESS_KEY_ID
+    - AWS_SECRET_ACCESS_KEY
+
+  constant_environment_variables:
+    AWS_ENDPOINT_URL: "https://idskhu5vqvtl.compat.objectstorage.us-chicago-1.oraclecloud.com"
+    AWS_ENDPOINT_URL_S3: "https://idskhu5vqvtl.compat.objectstorage.us-chicago-1.oraclecloud.com"
+    AWS_DEFAULT_REGION: "us-chicago-1"
+    AWS_REGION: "us-chicago-1"
+    AWS_REQUEST_CHECKSUM_CALCULATION: "when_required"
+    AWS_RESPONSE_CHECKSUM_VALIDATION: "when_required"
+    PYTHONUNBUFFERED: "1"
+    TORCH_CUDA_ARCH_LIST: "8.0"
+    PATH: /usr/local/cuda/bin:$PATH
+    LD_LIBRARY_PATH: /usr/local/cuda/lib64:$LD_LIBRARY_PATH

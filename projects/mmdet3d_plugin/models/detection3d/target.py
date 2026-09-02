@@ -403,7 +403,7 @@ class SparseBox3DTarget(BaseTargetWithDenoising):
         valid_mask,
         dn_id_target,
     ):
-        if self.num_temp_dn_groups < 0:
+        if self.num_temp_dn_groups <= 0:
             return
         num_dn_groups = self.num_dn_groups
         bs, num_dn = dn_instance_feature.shape[:2]

@@ -235,8 +235,16 @@ def main():
     # init the meta dict to record some important information such as
     # environment info and seed, which will be logged
     meta = dict()
-    # log env info
-    env_info_dict = collect_env()
+    # log env info. mmcv-lite (no CUDA ops) makes collect_env probe
+    # get_compiler_version and raise; SparseDrive does not use those ops.
+    try:
+        env_info_dict = collect_env()
+    except Exception as e:
+        logger.warning(
+            "collect_env failed (%s); continuing without MMCV CUDA metadata",
+            e,
+        )
+        env_info_dict = {}
     env_info = "\n".join([(f"{k}: {v}") for k, v in env_info_dict.items()])
     dash_line = "-" * 60 + "\n"
     logger.info(
