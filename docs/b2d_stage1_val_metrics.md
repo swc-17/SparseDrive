@@ -74,3 +74,15 @@ No StopLine class.
 
 Checkpoint `iter_73360.pth`, job `sparsedrive_b2d_stage1_eval-iqf9b7`.
 Same val protocol. Fill classwise tables when that eval finishes.
+
+---
+
+## Test plan execution (2026-09-02)
+
+| Item | Result |
+|---|---|
+| Train yaml `run_name=b2d_stage1_v1_a100x8`; `iter_73360.pth` on S3 | **Pass.** Eval yaml pins that ckpt. Train yaml does not list the `.pth` (it writes that prefix). |
+| Epoch-8 `hob6p7` vs this doc | **Pass.** Logged dict matches mAP 0.3565, NDS 0.4194, mAP_normal 0.5251 and classwise APs. Artifacts still on S3. |
+| Epoch-20 `iqf9b7` classwise | **Open.** Job still staging B2D clips (~900/1000 at check). |
+| Navtest protocol (8 cams, 7 det / 3 map) | **Config pass.** `sparsedrive_navsim_stage1_eval_navtest.py` inherits 8 cams and classes `vehicle…generic_object` / `ped_crossing, divider, boundary`. |
+| Navtest job `sej3cn` | **Fail.** Inference ran; eval asserted 12144/12146 (`12146 % 8`). Sampler now gives leftover sequences to the last rank. Relaunch: `tppdxa` (running). |

@@ -71,12 +71,21 @@ class DistributedSampler(_DistributedSampler):
         indices = []
         perfix_sum = 0
         split_length = len(self.dataset) // self.num_replicas
-        for i in range(len(sequence_splits)):
+        seq_i = 0
+        while seq_i < len(sequence_splits):
             if perfix_sum >= (self.rank + 1) * split_length:
                 break
-            elif perfix_sum >= self.rank * split_length:
-                indices.extend(sequence_splits[i])
-            perfix_sum += len(sequence_splits[i])
+            if perfix_sum >= self.rank * split_length:
+                indices.extend(sequence_splits[seq_i])
+            perfix_sum += len(sequence_splits[seq_i])
+            seq_i += 1
+        # Integer split drops len(dataset) % num_replicas frames. Last rank
+        # takes the leftover sequences so eval asserts (e.g. navtest 12146)
+        # still see every sample.
+        if self.rank == self.num_replicas - 1:
+            while seq_i < len(sequence_splits):
+                indices.extend(sequence_splits[seq_i])
+                seq_i += 1
 
         self.num_samples = len(indices)
         return iter(indices)
