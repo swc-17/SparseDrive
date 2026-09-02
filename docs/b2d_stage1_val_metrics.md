@@ -15,23 +15,25 @@ There is no separate test pickle; `data.test` is this val split.
 | W&B | https://appliedintuition.wandb.io/research/sparsedrive-b2d/runs/sparsedrive_b2d_stage1-askfdq |
 | Train ckpts | `s3://research-datasets-chicago/users/tejan/sparsedrive_b2d/work_dirs/b2d_stage1_v1_a100x8` |
 | Eval artifacts (epoch 8) | `s3://research-datasets-chicago/users/tejan/sparsedrive_b2d/work_dirs/b2d_stage1_v1_eval_iter29344` |
+| Eval artifacts (epoch 20) | `s3://research-datasets-chicago/users/tejan/sparsedrive_b2d/work_dirs/b2d_stage1_v1_eval_iter73360` |
 
 Protocol: camera-only, 6 RGB views, 1600×900 → 704×384, ROI 30×60 m.
 Detection AP is nuScenes-style center-distance (0.5/1/2/4 m) over 8 classes
 (`others` is trained but not in `class_range`). Map AP is chamfer at
-0.5/1.0/1.5 m over 6 polyline classes. Checkpoint for all numbers below:
-`latest_iter_29344.pth` (iter 29,344 ≈ epoch 8 / 20), job
-`sparsedrive_b2d_stage1_eval-hob6p7`.
+0.5/1.0/1.5 m over 6 polyline classes.
 
-| Metric | Value |
-|---|---:|
-| Det **mAP** | **0.3565** |
-| Det **NDS** | **0.4194** |
-| mATE | 0.7766 |
-| mASE | 0.2024 |
-| mAOE | 0.1599 |
-| mAVE | 0.8692 |
-| Map **mAP_normal** | **0.5251** |
+Headline numbers are epoch 20 (`iter_73360.pth`, job
+`sparsedrive_b2d_stage1_eval-iqf9b7`, finished 2026-09-02 11:58 PDT, 1h 14m).
+
+| Metric | Epoch 8 | Epoch 20 |
+|---|---:|---:|
+| Det **mAP** | 0.3565 | **0.4130** |
+| Det **NDS** | 0.4194 | **0.5092** |
+| mATE | 0.7766 | 0.6301 |
+| mASE | 0.2024 | 0.1417 |
+| mAOE | 0.1599 | 0.1564 |
+| mAVE | 0.8692 | 0.5543 |
+| Map **mAP_normal** | 0.5251 | **0.6251** |
 
 ---
 
@@ -70,10 +72,37 @@ No StopLine class.
 
 ---
 
-## Epoch 20 (pending)
+## Classwise breakdown (epoch 20)
 
-Checkpoint `iter_73360.pth`, job `sparsedrive_b2d_stage1_eval-iqf9b7`.
-Same val protocol. Fill classwise tables when that eval finishes.
+Checkpoint `iter_73360.pth`. Same val protocol as epoch 8.
+
+### Detection
+
+| Class | AP | AP@0.5 | AP@1.0 | AP@2.0 | AP@4.0 | ATE | ASE | AOE | AVE |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| car | 0.3883 | 0.1171 | 0.2734 | 0.4894 | 0.6733 | 0.607 | 0.088 | 0.047 | 1.414 |
+| van | 0.2008 | 0.0053 | 0.0597 | 0.2717 | 0.4666 | 0.949 | 0.201 | 0.030 | 0.010 |
+| truck | 0.3146 | 0.0865 | 0.2997 | 0.4180 | 0.4543 | 0.675 | 0.213 | 0.061 | 1.564 |
+| bicycle | 0.4592 | 0.0423 | 0.2392 | 0.6712 | 0.8840 | 0.801 | 0.112 | 0.034 | 0.994 |
+| traffic_sign | 0.3491 | 0.1179 | 0.2765 | 0.4510 | 0.5510 | 0.542 | 0.082 | 0.062 | 0.005 |
+| traffic_cone | 0.5723 | 0.3087 | 0.4750 | 0.6811 | 0.8243 | 0.400 | 0.168 | 0.914 | 0.005 |
+| traffic_light | 0.4998 | 0.2381 | 0.4681 | 0.5790 | 0.7138 | 0.413 | 0.155 | 0.056 | 0.004 |
+| pedestrian | 0.5198 | 0.1809 | 0.4492 | 0.6896 | 0.7596 | 0.655 | 0.115 | 0.048 | 0.438 |
+| **mean** | **0.4130** | | | | | **0.630** | **0.142** | **0.156** | **0.554** |
+
+### Mapping
+
+`#GT` / `#pred` follow the evaluator (`num_gts` / `num_preds`).
+
+| Class | #GT | #pred | AP@0.5 | AP@1.0 | AP@1.5 | AP |
+|---|---:|---:|---:|---:|---:|---:|
+| Broken | 41925 | 34715 | 0.4353 | 0.6028 | 0.6649 | 0.5677 |
+| Solid | 74526 | 67609 | 0.5385 | 0.6816 | 0.7502 | 0.6568 |
+| SolidSolid | 6588 | 4946 | 0.5277 | 0.6253 | 0.6779 | 0.6103 |
+| Center | 149699 | 137460 | 0.4462 | 0.6980 | 0.8162 | 0.6535 |
+| TrafficLight | 12416 | 12120 | 0.5151 | 0.6299 | 0.7602 | 0.6351 |
+| StopSign | 2135 | 2080 | 0.3513 | 0.6753 | 0.8555 | 0.6274 |
+| **mAP_normal** | | | | | | **0.6251** |
 
 ---
 
@@ -83,6 +112,6 @@ Same val protocol. Fill classwise tables when that eval finishes.
 |---|---|
 | Train yaml `run_name=b2d_stage1_v1_a100x8`; `iter_73360.pth` on S3 | **Pass.** Eval yaml pins that ckpt. Train yaml does not list the `.pth` (it writes that prefix). |
 | Epoch-8 `hob6p7` vs this doc | **Pass.** Logged dict matches mAP 0.3565, NDS 0.4194, mAP_normal 0.5251 and classwise APs. Artifacts still on S3. |
-| Epoch-20 `iqf9b7` classwise | **Open.** Job still staging B2D clips (~900/1000 at check). |
+| Epoch-20 `iqf9b7` classwise | **Pass.** Official val: det mAP 0.4130, NDS 0.5092, map mAP_normal 0.6251. Artifacts `.../b2d_stage1_v1_eval_iter73360`. |
 | Navtest protocol (8 cams, 7 det / 3 map) | **Config pass.** `sparsedrive_navsim_stage1_eval_navtest.py` inherits 8 cams and classes `vehicle…generic_object` / `ped_crossing, divider, boundary`. |
 | Navtest job `sej3cn` | **Fail.** Inference ran; eval asserted 12144/12146 (`12146 % 8`). Sampler now gives leftover sequences to the last rank. Relaunch: `tppdxa` (running). |
