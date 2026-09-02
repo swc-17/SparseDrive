@@ -53,7 +53,18 @@ class SparsePoint3DTarget(BaseTargetWithDenoising):
         pts_preds,
         cls_targets,
         pts_targets,
+        tl_targets=None,
     ):
+        """Hungarian matching between predictions and GT polylines.
+
+        Args:
+            tl_targets: optional list of per-sample (num_gt, 3) tensors of
+                traffic-light attributes (tl_x, tl_y, state) aligned with
+                cls_targets. When given, a fourth output (bs, num_pred, 3)
+                is returned, filled with (nan, nan, -1) for unmatched
+                queries; the attributes are permutation-independent so the
+                gt permutation index is irrelevant for them.
+        """
         pts_targets  = [x.flatten(2, 3) if len(x.shape)==4 else x for x in pts_targets]
         indices = []
         for(cls_pred, pts_pred, cls_target, pts_target) in zip(
@@ -71,6 +82,11 @@ class SparsePoint3DTarget(BaseTargetWithDenoising):
         output_cls_target = cls_targets[0].new_ones([bs, num_pred], dtype=torch.long) * num_cls
         output_pts_target = pts_preds.new_zeros(pts_preds.shape)
         output_reg_weights = pts_preds.new_zeros(pts_preds.shape)
+        output_tl_target = None
+        if tl_targets is not None:
+            output_tl_target = pts_preds.new_full([bs, num_pred, 3],
+                                                  float("nan"))
+            output_tl_target[..., 2] = -1.0
         for i, (pred_idx, target_idx, gt_permute_index) in enumerate(indices):
             if len(cls_targets[i]) == 0:
                 continue
@@ -78,7 +94,14 @@ class SparsePoint3DTarget(BaseTargetWithDenoising):
             output_cls_target[i, pred_idx] = cls_targets[i][target_idx]
             output_pts_target[i, pred_idx] = pts_targets[i][target_idx, permute_idx]
             output_reg_weights[i, pred_idx] = 1
+            if output_tl_target is not None:
+                output_tl_target[i, pred_idx] = (
+                    tl_targets[i][target_idx].to(output_tl_target.dtype)
+                )
 
+        if output_tl_target is not None:
+            return (output_cls_target, output_pts_target,
+                    output_reg_weights, output_tl_target)
         return output_cls_target, output_pts_target, output_reg_weights
 
     def normalize_line(self, line):

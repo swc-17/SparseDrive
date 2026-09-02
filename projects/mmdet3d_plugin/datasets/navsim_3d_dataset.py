@@ -41,7 +41,9 @@ class NavSim3DDataset(Dataset):
         "ped_crossing",
         "divider",
         "boundary",
+        "stop_line",
     )
+    STOP_LINE_LABEL = MAP_CLASSES.index("stop_line")
 
     def __init__(
         self,
@@ -271,6 +273,12 @@ class NavSim3DDataset(Dataset):
         input_dict["lidar2global"] = ego2global
 
         input_dict["map_geoms"] = self.anno2geom(info["map_annos"])
+        # traffic-light attributes aligned with map_geoms[STOP_LINE_LABEL]:
+        # (tl_x, tl_y, state) per stop line; empty for pre-v1.3 infos
+        # (which carry no stop_line class either).
+        input_dict["map_tl_infos"] = np.asarray(
+            info.get("map_tl_annos", np.zeros((0, 3))), dtype=np.float32
+        ).reshape(-1, 3)
 
         if self.modality["use_camera"]:
             image_paths = []
@@ -361,6 +369,10 @@ class NavSim3DDataset(Dataset):
             gt_ego_fut_cmd_valid=np.asarray(
                 info["gt_ego_fut_cmd_valid"], dtype=np.float32
             ).reshape(1),
+            # goal conditioning: 4 s GT future endpoint in the current SD ego
+            # frame. The converter pads missing steps with zero deltas, so
+            # the delta sum is the last valid position.
+            gt_ego_goal=info["gt_ego_fut_trajs"].sum(axis=0).astype(np.float32),
             # future collision boxes precomputed in the current SD frame
             fut_boxes=[fb.copy() for fb in info["fut_boxes"]],
         )
@@ -439,6 +451,182 @@ class NavSim3DDataset(Dataset):
         os.makedirs(os.path.dirname(out_path), exist_ok=True)
         mmcv.dump(submissions, out_path)
         return out_path
+
+    def _evaluate_tl(
+        self,
+        results,
+        match_thr=1.5,
+        pos_success_thr=4.0,
+        score_thr=0.2,
+        logger=None,
+    ):
+        """Stop-line ↔ traffic-light association + attribute metrics.
+
+        Association is implicit in the model (TL attrs live on the stop-line
+        query). Offline we make it explicit: predicted ``stop_line``
+        instances (score-sorted) are greedily one-to-one matched to GT stop
+        lines by symmetric chamfer distance (< ``match_thr`` m = loosest
+        map-AP threshold). A successful **geometry association** is that
+        match; attribute metrics and ``tl/assoc_success`` are then scored
+        only on associated pairs.
+
+        Precision / F1 only count predictions with score >= ``score_thr``
+        (the decoder emits all map anchors; unthresholded precision is
+        dominated by low-score slots). Recall still uses the full
+        score-sorted list so high-recall matching is not score-gated.
+
+        Reported keys:
+
+        Association (geometry)
+        - tl/assoc_recall (= tl/stop_line_recall): matched GT / GT stop lines
+        - tl/assoc_precision: TP / (TP+FP) among preds with score>=score_thr
+        - tl/assoc_f1: harmonic mean of precision and recall
+        - tl/assoc_chamfer: mean chamfer (m) over matched pairs
+
+        Attributes (on associated pairs)
+        - tl/state_acc: red/green accuracy where GT state is known
+        - tl/pos_l2: mean L2 (m) of predicted TL xy where GT has a bulb
+
+        Joint
+        - tl/assoc_success: fraction of GT stop lines whose match exists and
+          whose known attributes pass (state correct if known; TL pos L2
+          < ``pos_success_thr`` m if bulb mapped). Unknown attrs are not
+          required.
+        """
+        from mmcv.utils import print_log
+
+        def interp(line, n=100):
+            geom = LineString(line)
+            d = np.linspace(0, geom.length, n)
+            return np.array([geom.interpolate(x).coords[0] for x in d])
+
+        def chamfer(a, b):
+            d = np.linalg.norm(a[:, None] - b[None], axis=-1)
+            return 0.5 * (d.min(1).mean() + d.min(0).mean())
+
+        n_gt = 0
+        n_pred_thr = 0
+        n_matched = 0
+        n_matched_thr = 0
+        n_state = 0
+        n_state_correct = 0
+        n_assoc_success = 0
+        pos_errs = []
+        match_chamfers = []
+        for i, res in enumerate(results):
+            res = res.get("img_bbox", res)
+            info = self.data_infos[i]
+            gt_lines = info["map_annos"].get(self.STOP_LINE_LABEL, [])
+            gt_tl = np.asarray(info["map_tl_annos"]).reshape(-1, 3)
+            n_gt += len(gt_lines)
+
+            labels = np.asarray(res["labels"])
+            scores = np.asarray(res["scores"])
+            pred_idx = np.where(labels == self.STOP_LINE_LABEL)[0]
+            pred_idx = pred_idx[np.argsort(-scores[pred_idx])]
+            n_pred_thr += int((scores[pred_idx] >= score_thr).sum())
+
+            if len(gt_lines) == 0:
+                continue
+            gt_interp = [interp(l) for l in gt_lines]
+            gt_success = [False] * len(gt_lines)
+
+            taken = set()
+            for pi in pred_idx:
+                vec = np.asarray(res["vectors"][pi])
+                if len(vec) < 2:
+                    continue
+                pl = interp(vec)
+                dists = [
+                    chamfer(pl, g) if gi not in taken else np.inf
+                    for gi, g in enumerate(gt_interp)
+                ]
+                gi = int(np.argmin(dists))
+                if dists[gi] >= match_thr:
+                    continue
+                taken.add(gi)
+                n_matched += 1
+                if float(scores[pi]) >= score_thr:
+                    n_matched_thr += 1
+                match_chamfers.append(float(dists[gi]))
+
+                gt_state = float(gt_tl[gi, 2])
+                state_ok = True
+                if gt_state >= 0:
+                    n_state += 1
+                    pred_state = int(res["tl_state"][pi])
+                    state_ok = pred_state == int(gt_state)
+                    n_state_correct += int(state_ok)
+
+                pos_ok = True
+                if np.isfinite(gt_tl[gi, :2]).all():
+                    err = float(np.linalg.norm(
+                        np.asarray(res["tl_xy"][pi]) - gt_tl[gi, :2]
+                    ))
+                    pos_errs.append(err)
+                    pos_ok = err < pos_success_thr
+
+                gt_success[gi] = state_ok and pos_ok
+
+            n_assoc_success += sum(gt_success)
+
+        recall = n_matched / n_gt if n_gt else float("nan")
+        precision = (
+            n_matched_thr / n_pred_thr if n_pred_thr else float("nan")
+        )
+        if (
+            recall == recall
+            and precision == precision
+            and (precision + recall) > 0
+        ):
+            f1 = 2 * precision * recall / (precision + recall)
+        else:
+            f1 = float("nan")
+
+        out = {
+            "tl/stop_line_recall": recall,
+            "tl/assoc_recall": recall,
+            "tl/assoc_precision": precision,
+            "tl/assoc_f1": f1,
+            "tl/assoc_chamfer": (
+                float(np.mean(match_chamfers)) if match_chamfers
+                else float("nan")
+            ),
+            "tl/assoc_success": (
+                n_assoc_success / n_gt if n_gt else float("nan")
+            ),
+            "tl/state_acc": (
+                n_state_correct / n_state if n_state else float("nan")
+            ),
+            "tl/pos_l2": (
+                float(np.mean(pos_errs)) if pos_errs else float("nan")
+            ),
+            "tl/num_gt_stop_lines": float(n_gt),
+            "tl/num_pred_stop_lines_thr": float(n_pred_thr),
+            "tl/num_matched": float(n_matched),
+            "tl/num_matched_thr": float(n_matched_thr),
+            "tl/num_assoc_success": float(n_assoc_success),
+            "tl/num_state_evaluated": float(n_state),
+            "tl/pos_success_thr": float(pos_success_thr),
+            "tl/match_thr": float(match_thr),
+            "tl/score_thr": float(score_thr),
+        }
+        print_log(
+            f"[tl] assoc P/R/F1 "
+            f"{out['tl/assoc_precision']:.3f}/"
+            f"{out['tl/assoc_recall']:.3f}/"
+            f"{out['tl/assoc_f1']:.3f} "
+            f"(score>={score_thr}: matched_thr {n_matched_thr}/"
+            f"pred_thr {n_pred_thr}; all-matched {n_matched}/{n_gt} gt), "
+            f"chamfer {out['tl/assoc_chamfer']:.2f} m, "
+            f"assoc_success {out['tl/assoc_success']:.3f} "
+            f"({n_assoc_success}/{n_gt}; pos<{pos_success_thr} m), "
+            f"state acc {out['tl/state_acc']:.3f} "
+            f"({n_state_correct}/{n_state}), "
+            f"TL pos L2 {out['tl/pos_l2']:.2f} m over {len(pos_errs)}",
+            logger=logger,
+        )
+        return out
 
     def _map_eval_config(self):
         """eval_config copy for VectorEvaluate's GT dataset, with non-dataset
@@ -565,6 +753,17 @@ class NavSim3DDataset(Dataset):
                     result_path, logger=logger
                 )
                 results_dict.update(map_results_dict)
+
+                # traffic-light attribute metrics (models with the map TL
+                # branch; needs full split coverage like detection eval)
+                if (
+                    "tl_xy" in first
+                    and "stop_line" in self.MAP_CLASSES
+                    and len(results) == len(self.data_infos)
+                ):
+                    results_dict.update(
+                        self._evaluate_tl(results, logger=logger)
+                    )
 
         if eval_mode.get("with_planning", False):
             assert self.eval_config is not None, (

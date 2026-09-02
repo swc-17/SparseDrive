@@ -22,6 +22,12 @@ class VectorizeMap(object):
             and `sample_dist` will be ignored.
         sample_num (int): number of points to interpolate from a polyline. Set to -1 to ignore.
         sample_dist (float): interpolate distance. Set to -1 to ignore.
+        tl_label (int): map label carrying traffic-light attributes (the
+            stop_line class). When set (and permute=True), emits
+            `gt_map_tl` (num_inst, 3) = (tl_x, tl_y, state) aligned with
+            `gt_map_labels`, taking rows from `map_tl_infos` for tl_label
+            instances and (nan, nan, -1) for all other classes. Set to
+            None (default) to disable.
     """
 
     def __init__(self, 
@@ -31,7 +37,8 @@ class VectorizeMap(object):
                  simplify: bool=False, 
                  sample_num: int=-1, 
                  sample_dist: float=-1, 
-                 permute: bool=False
+                 permute: bool=False,
+                 tl_label: int=None,
         ):
         self.coords_dim = coords_dim
         self.sample_num = sample_num
@@ -40,6 +47,7 @@ class VectorizeMap(object):
         self.normalize = normalize
         self.simplify = simplify
         self.permute = permute
+        self.tl_label = tl_label
 
         if sample_dist > 0:
             assert sample_num < 0 and not simplify
@@ -184,13 +192,30 @@ class VectorizeMap(object):
         vectors = self.get_vectorized_lines(map_geoms)
 
         if self.permute:
-            gt_map_labels, gt_map_pts = [], []
+            tl_infos = None
+            if self.tl_label is not None:
+                tl_infos = np.asarray(
+                    input_dict["map_tl_infos"], dtype=np.float32
+                ).reshape(-1, 3)
+            gt_map_labels, gt_map_pts, gt_map_tl = [], [], []
             for label, vecs in vectors.items():
-                for vec in vecs:
+                for i, vec in enumerate(vecs):
                     gt_map_labels.append(label)
                     gt_map_pts.append(vec)
+                    if tl_infos is not None:
+                        if label == self.tl_label:
+                            gt_map_tl.append(tl_infos[i])
+                        else:
+                            gt_map_tl.append(
+                                np.array([np.nan, np.nan, -1.0],
+                                         dtype=np.float32)
+                            )
             input_dict['gt_map_labels'] = np.array(gt_map_labels, dtype=np.int64)
             input_dict['gt_map_pts'] = np.array(gt_map_pts, dtype=np.float32).reshape(-1, 2 * (self.sample_num - 1), self.sample_num, self.coords_dim)
+            if tl_infos is not None:
+                input_dict['gt_map_tl'] = np.array(
+                    gt_map_tl, dtype=np.float32
+                ).reshape(-1, 3)
         else:
             input_dict['vectors'] = DC(vectors, stack=False, cpu_only=True)
         

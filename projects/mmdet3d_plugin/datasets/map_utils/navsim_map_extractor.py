@@ -17,7 +17,17 @@ map expansion:
 - ``boundary``: contour of the union of the drivable polygons
   (``road_segments`` + ``lanes_polygons`` + ``intersections`` +
   ``generic_drivable_areas`` + ``carpark_areas``), clockwise exteriors /
-  counter-clockwise interiors exactly like the nuScenes extractor.
+  counter-clockwise interiors exactly like the nuScenes extractor;
+- ``stop_line``: traffic-light-controlled stop bars from the
+  ``stop_polygons`` layer (``stop_polygon_type_fid == 2`` only). Each stop
+  polygon is a thin quad spanning the lane width; the emitted polyline is
+  the midline of its minimum rotated rectangle along the long axis (within
+  half the bar thickness of the painted line). Each stop line carries
+  aligned association extras (``stop_line_extras``): the mean position of
+  its controlling traffic-light bulbs (``stop_polygons.traffic_light_fids``
+  -> ``traffic_lights`` points) in the local frame, and the lane-connector
+  fids referencing it via ``lane_connectors.traffic_light_stop_line_fids``
+  (used by the converter to resolve per-frame red/green status).
 
 Coordinate contract: the GPKGs store EPSG:4326 geometry; each map's ``meta``
 layer records the projected CRS (UTM) that nuPlan/NAVSIM ego poses live in.
@@ -63,6 +73,42 @@ DRIVABLE_LAYERS = (
     "carpark_areas",
 )
 
+# stop_polygons.stop_polygon_type_fid for traffic-light-controlled stop
+# lines (nuplan StopLineType.TRAFFIC_LIGHT; 0=ped_crossing, 1=stop_sign,
+# 3=turn_stop, 4=yield are intentionally excluded).
+STOP_POLYGON_TYPE_TRAFFIC_LIGHT = 2
+
+
+def _parse_fids(value):
+    """Comma-separated GPKG fid-list string -> list of ints."""
+    if value is None:
+        return []
+    return [int(tok) for tok in str(value).split(",") if tok.strip()]
+
+
+def _stop_bar_line(poly):
+    """Stop polygon -> stop-bar midline (LineString) or None.
+
+    The midline of the minimum rotated rectangle along its long axis: the
+    polygon spans the lane width with a thin (~0.5 m) extent along travel
+    direction, so this lands on the painted bar to within half thickness.
+    """
+    rect = poly.minimum_rotated_rectangle
+    if rect.geom_type != "Polygon":
+        return None
+    corners = np.array(rect.exterior.coords)[:4]
+    e01 = np.linalg.norm(corners[1] - corners[0])
+    e12 = np.linalg.norm(corners[2] - corners[1])
+    if e01 >= e12:  # long axis along corners[0] -> corners[1]
+        p0 = (corners[3] + corners[0]) / 2.0
+        p1 = (corners[1] + corners[2]) / 2.0
+    else:  # long axis along corners[1] -> corners[2]
+        p0 = (corners[0] + corners[1]) / 2.0
+        p1 = (corners[2] + corners[3]) / 2.0
+    if np.linalg.norm(p1 - p0) <= 0:
+        return None
+    return LineString([p0, p1])
+
 
 def _union_ped(ped_geoms):
     """Merge close, similarly-oriented ped crossings (copy of the nuScenes
@@ -88,8 +134,8 @@ def _union_ped(ped_geoms):
         remain_idx.pop(remain_idx.index(i))
         pgeom_v, pgeom_v_norm = get_rec_direction(pgeom)
         final_pgeom.append(pgeom)
-        for o in tree.query(pgeom):
-            o_idx = index_by_id[id(o)]
+        for o_idx in tree.query(pgeom):
+            o = ped_geoms[o_idx]
             if o_idx not in remain_idx:
                 continue
             o_v, o_v_norm = get_rec_direction(o)
@@ -163,13 +209,59 @@ class _LocationMap:
                     if g.is_valid and not g.is_empty:
                         drivable.append(g)
 
+        # traffic-light bulb positions: fid -> UTM xy
+        tl_xy = {}
+        with fiona.open(gpkg_path, layer="traffic_lights") as src:
+            for f in src:
+                g = to_utm(f["geometry"])
+                tl_xy[int(f.id)] = (g.x, g.y)
+
+        # traffic-light-controlled stop polygons + their TL association
+        stop_geoms, stop_meta = [], []
+        with fiona.open(gpkg_path, layer="stop_polygons") as src:
+            for f in src:
+                type_fid = int(f["properties"]["stop_polygon_type_fid"])
+                if type_fid != STOP_POLYGON_TYPE_TRAFFIC_LIGHT:
+                    continue
+                g = to_utm(f["geometry"]).buffer(0)
+                if not g.is_valid or g.is_empty:
+                    continue
+                stop_geoms.append(g)
+                stop_meta.append(dict(
+                    fid=int(f.id),
+                    tl_fids=_parse_fids(
+                        f["properties"]["traffic_light_fids"]
+                    ),
+                ))
+
+        # stop polygon fid -> lane connector fids referencing it (per-frame
+        # TL status in the logs is keyed by lane connector id)
+        stop_connectors = {}
+        with fiona.open(gpkg_path, layer="lane_connectors") as src:
+            for f in src:
+                for sfid in _parse_fids(
+                    f["properties"]["traffic_light_stop_line_fids"]
+                ):
+                    stop_connectors.setdefault(sfid, []).append(int(f.id))
+
+        self.dividers = dividers
+        self.crosswalks = crosswalks
+        self.drivable = drivable
+        self.stop_lines = stop_geoms
         self.divider_tree = strtree.STRtree(dividers)
         self.crosswalk_tree = strtree.STRtree(crosswalks)
         self.drivable_tree = strtree.STRtree(drivable)
+        self.tl_xy = tl_xy
+        self.stop_meta = stop_meta
+        self.stop_tree = strtree.STRtree(stop_geoms)
+        self.stop_index_by_id = {id(g): i for i, g in enumerate(stop_geoms)}
+        self.stop_connectors = stop_connectors
         self.counts = dict(
             dividers=len(dividers),
             crosswalks=len(crosswalks),
             drivable=len(drivable),
+            stop_lines=len(stop_geoms),
+            traffic_lights=len(tl_xy),
         )
 
 
@@ -224,12 +316,15 @@ class NavsimMapExtractor(object):
 
         Returns:
             dict with LineString lists for ``ped_crossing`` / ``divider`` /
-            ``boundary`` plus the clipped ``drivable_area`` polygons — the
-            same shape ``NuscMapExtractor.get_map_geom`` returns; all
-            geometry is in the SparseDrive local BEV frame.
+            ``boundary`` / ``stop_line`` plus the clipped ``drivable_area``
+            polygons — the same shape ``NuscMapExtractor.get_map_geom``
+            returns; all geometry is in the SparseDrive local BEV frame.
+            ``stop_line_extras`` is a list aligned with ``stop_line``:
+            dict(tl_xy=(2,) float array or None, connector_fids=[int]).
         """
         loc_map = self._get_map(location)
         tx, ty = float(translation[0]), float(translation[1])
+        cos_y, sin_y = np.cos(yaw_sd), np.sin(yaw_sd)
 
         # ROI patch in global coordinates (rotate local patch to ego yaw)
         patch_global = affinity.translate(
@@ -245,7 +340,8 @@ class NavsimMapExtractor(object):
 
         # dividers: clip lane-boundary lines to the local patch
         all_dividers = []
-        for g in loc_map.divider_tree.query(patch_global):
+        for idx_d in loc_map.divider_tree.query(patch_global):
+            g = loc_map.dividers[idx_d]
             line = to_local(g).intersection(self.local_patch)
             if line.is_empty:
                 continue
@@ -255,7 +351,8 @@ class NavsimMapExtractor(object):
 
         # ped crossings: clip polygons, merge close ones, take contours
         ped_crossings = []
-        for g in loc_map.crosswalk_tree.query(patch_global):
+        for idx_c in loc_map.crosswalk_tree.query(patch_global):
+            g = loc_map.crosswalks[idx_c]
             poly = to_local(g).intersection(self.local_patch)
             if poly.is_empty:
                 continue
@@ -272,7 +369,8 @@ class NavsimMapExtractor(object):
 
         # boundary: contour of the clipped drivable-area union
         clipped = []
-        for g in loc_map.drivable_tree.query(patch_global):
+        for idx_v in loc_map.drivable_tree.query(patch_global):
+            g = loc_map.drivable[idx_v]
             poly = to_local(g).intersection(self.local_patch)
             if not poly.is_empty:
                 clipped.append(poly)
@@ -282,9 +380,47 @@ class NavsimMapExtractor(object):
                           if p.geom_type == "Polygon" and p.area > 0]
         boundaries = get_drivable_area_contour(drivable_areas, self.roi_size)
 
+        # stop lines: TL-controlled stop-bar midlines clipped to the patch,
+        # with aligned TL-association extras per emitted piece
+        stop_lines, stop_line_extras = [], []
+        for idx_s in loc_map.stop_tree.query(patch_global):
+            g = loc_map.stop_lines[idx_s]
+            idx = idx_s
+            meta = loc_map.stop_meta[idx]
+            bar = _stop_bar_line(g)
+            if bar is None:
+                continue
+            line = to_local(bar).intersection(self.local_patch)
+            if line.is_empty:
+                continue
+            tl_pts = [
+                loc_map.tl_xy[f] for f in meta["tl_fids"]
+                if f in loc_map.tl_xy
+            ]
+            if tl_pts:
+                # p_local = Rz(-yaw_sd) @ (p_global - t); the mean TL bulb
+                # position may lie outside the ROI patch (that is fine)
+                mean = np.asarray(tl_pts, dtype=np.float64).mean(axis=0)
+                dx, dy = mean[0] - tx, mean[1] - ty
+                tl_local = np.array(
+                    [cos_y * dx + sin_y * dy, -sin_y * dx + cos_y * dy]
+                )
+            else:
+                tl_local = None
+            connector_fids = loc_map.stop_connectors.get(meta["fid"], [])
+            for piece in split_collections(line):
+                if piece.geom_type == "LineString" and piece.length > 0:
+                    stop_lines.append(piece)
+                    stop_line_extras.append(dict(
+                        tl_xy=tl_local,
+                        connector_fids=connector_fids,
+                    ))
+
         return dict(
             divider=all_dividers,           # List[LineString]
             ped_crossing=ped_crossing_lines,  # List[LineString]
             boundary=boundaries,            # List[LineString]
+            stop_line=stop_lines,           # List[LineString]
+            stop_line_extras=stop_line_extras,  # aligned with stop_line
             drivable_area=drivable_areas,   # List[Polygon]
         )

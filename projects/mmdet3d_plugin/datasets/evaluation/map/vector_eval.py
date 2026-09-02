@@ -268,7 +268,7 @@ class VectorEvaluate(object):
         for label in self.id2cat.keys():
             for thr in self.thresholds:
                 mAP_normal += result_dict[self.id2cat[label]][f'AP@{thr}']
-        mAP_normal /= len(self.thresholds) * len(self.id2cat)
+        mAP_normal = mAP_normal / (len(self.id2cat) * len(self.thresholds))
 
         print_log(f'mAP_normal = {mAP_normal:.4f}\n', logger=logger)
         # print_log(f'mAP_hard = {mAP_easy:.4f}\n', logger=logger)

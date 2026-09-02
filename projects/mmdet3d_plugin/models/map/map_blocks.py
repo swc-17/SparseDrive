@@ -46,6 +46,7 @@ class SparsePoint3DRefinementModule(BaseModule):
         coords_dim: int = 2,
         num_cls: int = 3,
         with_cls_branch: bool = True,
+        with_tl_branch: bool = False,
     ):
         super(SparsePoint3DRefinementModule, self).__init__()
         self.embed_dims = embed_dims
@@ -64,6 +65,17 @@ class SparsePoint3DRefinementModule(BaseModule):
             self.cls_layers = nn.Sequential(
                 *linear_relu_ln(embed_dims, 1, 2),
                 Linear(self.embed_dims, self.num_cls),
+            )
+        # traffic-light attribute branch for stop-line instances: 2 offset
+        # dims (TL BEV position relative to the predicted polyline mean)
+        # + 2 state logits (0=green, 1=red). Returned via the third
+        # ("quality") output slot so the shared Sparse4DHead forward
+        # threads it through unchanged.
+        self.with_tl_branch = with_tl_branch
+        if with_tl_branch:
+            self.tl_layers = nn.Sequential(
+                *linear_relu_ln(embed_dims, 1, 2),
+                Linear(self.embed_dims, 4),
             )
 
     def init_weight(self):
@@ -86,7 +98,10 @@ class SparsePoint3DRefinementModule(BaseModule):
             cls = self.cls_layers(instance_feature)  ## NOTE anchor embed?
         else:
             cls = None
-        qt = None
+        if self.with_tl_branch:
+            qt = self.tl_layers(instance_feature + anchor_embed)
+        else:
+            qt = None
         return output, cls, qt
 
 

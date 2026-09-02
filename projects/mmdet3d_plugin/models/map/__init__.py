@@ -1,4 +1,5 @@
 from .decoder import SparsePoint3DDecoder
+from .map_head import SparseMapHead
 from .target import SparsePoint3DTarget, HungarianLinesAssigner
 from .match_cost import LinesL1Cost, MapQueriesCost
 from .loss import LinesL1Loss, SparseLineLoss

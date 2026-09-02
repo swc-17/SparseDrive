@@ -28,10 +28,18 @@ info PKLs that implement the full SparseDrive training contract:
 
 Phase 2: local vector maps. Each sample's ``map_annos`` is populated from the
 nuPlan map GPKGs via ``NavsimMapExtractor`` (ped_crossing / divider /
-boundary, labels 0/1/2), clipped to the same (30, 60) BEV ROI the nuScenes
-configs use and expressed in the SparseDrive local frame — the exact schema
-``nuscenes_converter.geom2anno`` emits (dict label -> list of float64 (N, 2)
-polylines). ``--no-maps`` restores the Phase-0 empty-dict behavior.
+boundary / stop_line, labels 0/1/2/3), clipped to the same (30, 60) BEV ROI
+the nuScenes configs use and expressed in the SparseDrive local frame — the
+exact schema ``nuscenes_converter.geom2anno`` emits (dict label -> list of
+float64 (N, 2) polylines). ``--no-maps`` restores the Phase-0 empty-dict
+behavior.
+
+Traffic lights: each sample also carries ``map_tl_annos``, a float64 (N, 3)
+array aligned with ``map_annos[3]`` (the stop lines): mean controlling
+traffic-light bulb position in the SD local frame (NaN when the map has no
+bulb for the bar) and per-frame state 1=red / 0=green / -1=unknown resolved
+from the log's per-lane-connector ``traffic_lights`` field via the GPKG
+``lane_connectors.traffic_light_stop_line_fids`` linkage.
 
 The converter reads the raw log pickles directly (plain pickle files); it does
 not import navsim or the nuplan devkit.
@@ -59,12 +67,16 @@ import numpy as np
 import yaml
 from pyquaternion import Quaternion
 
-CONVERTER_VERSION = "navsim_converter_v1.2"  # v1.2: --workers (per-log
-# multiprocessing, serial-equivalent) + --split-json/--split-key frozen
-# log-split restriction + streamed pickle write for navtrain-scale outputs
+CONVERTER_VERSION = "navsim_converter_v1.3"  # v1.3: stop_line map class
+# (label 3, traffic-light-controlled stop bars) + per-sample map_tl_annos
+# (traffic-light position + red/green state aligned with the stop lines).
+# v1.2: --workers (per-log multiprocessing, serial-equivalent) +
+# --split-json/--split-key frozen log-split restriction + streamed pickle
+# write for navtrain-scale outputs
 
-# Map classes in the fixed SparseDrive order (labels 0/1/2).
-MAP_CLASSES = ("ped_crossing", "divider", "boundary")
+# Map classes in the fixed SparseDrive order (labels 0/1/2/3).
+MAP_CLASSES = ("ped_crossing", "divider", "boundary", "stop_line")
+STOP_LINE_LABEL = MAP_CLASSES.index("stop_line")
 # BEV ROI for local map extraction: x in [-15, 15], y in [-30, 30] in the
 # SparseDrive frame — identical to the nuScenes configs' roi_size.
 MAP_ROI_SIZE = (30.0, 60.0)
@@ -502,11 +514,21 @@ def extract_map_annos(map_extractor, fr, g_sd):
     Uses the SD-frame ego2global pose (G_sd = G_nav @ inv(C4)): its SE(2)
     yaw already contains the NAVSIM->SparseDrive rotation contract, so the
     extractor's global->local mapping lands directly in the SD frame.
+
+    Returns:
+        (map_annos, map_tl_annos): map_annos is the label->polylines dict;
+        map_tl_annos is a float64 (N, 3) array aligned with
+        map_annos[STOP_LINE_LABEL]: columns (tl_x, tl_y, state) with the
+        mean controlling-traffic-light position in the SD local frame (NaN
+        when the map carries no bulb for the stop line) and state 1=red /
+        0=green / -1=unknown resolved from the frame's per-lane-connector
+        ``traffic_lights`` status.
     """
     yaw_sd = math.atan2(g_sd[1, 0], g_sd[0, 0])
     map_geoms = map_extractor.get_map_geom(
         fr["map_location"], g_sd[:2, 3], yaw_sd
     )
+    extras = map_geoms.pop("stop_line_extras")
     annos = geom2anno(map_geoms)
     for label, lines in annos.items():
         for line in lines:
@@ -516,7 +538,29 @@ def extract_map_annos(map_extractor, fr, g_sd):
             assert np.isfinite(line).all(), (
                 f"non-finite map anno at {fr['token']}"
             )
-    return annos
+
+    # per-frame red/green status keyed by lane connector fid
+    tl_status = {
+        int(cid): bool(is_red)
+        for cid, is_red in fr.get("traffic_lights", [])
+    }
+    rows = []
+    for ex in extras:
+        if ex["tl_xy"] is None:
+            tl_x, tl_y = float("nan"), float("nan")
+        else:
+            tl_x, tl_y = float(ex["tl_xy"][0]), float(ex["tl_xy"][1])
+        states = [
+            tl_status[c] for c in ex["connector_fids"] if c in tl_status
+        ]
+        # red wins over green when connectors sharing the bar disagree
+        state = 1.0 if any(states) else (0.0 if states else -1.0)
+        rows.append([tl_x, tl_y, state])
+    tl_annos = np.asarray(rows, dtype=np.float64).reshape(-1, 3)
+    assert len(tl_annos) == len(annos.get(STOP_LINE_LABEL, [])), (
+        f"stop_line / map_tl_annos misalignment at {fr['token']}"
+    )
+    return annos, tl_annos
 
 
 def frame_record(fr, seq_of):
@@ -605,6 +649,18 @@ def convert_scene(log_name, window, filt, seq_of, track2ind,
     window_seq_ids = {seq_of[w["token"]] for w in window}
     window_scene_tokens = {w["scene_token"] for w in window}
 
+    # ---- local vector map + traffic-light attributes for the stop lines
+    if "map_annos_nav" in fr:
+        # AlpaSim exports carry no stop-polygon / traffic-light layers
+        map_annos = embedded_map_annos(fr)
+        map_tl_annos = np.zeros((0, 3), dtype=np.float64)
+    elif map_extractor is not None:
+        map_annos, map_tl_annos = extract_map_annos(map_extractor, fr,
+                                                    g_sd_cur)
+    else:
+        map_annos = {}
+        map_tl_annos = np.zeros((0, 3), dtype=np.float64)
+
     info = dict(
         # identity / temporal linkage
         token=fr["token"],
@@ -652,13 +708,14 @@ def convert_scene(log_name, window, filt, seq_of, track2ind,
         gt_ego_fut_cmd=cmd,
         gt_ego_fut_cmd_valid=cmd_valid,
         ego_status=convert_ego_status(fr),
-        # maps: local ped_crossing/divider/boundary vectors (labels 0/1/2)
-        # in the SD frame, clipped to MAP_ROI_SIZE (empty dict if disabled)
-        map_annos=(
-            embedded_map_annos(fr) if "map_annos_nav" in fr
-            else extract_map_annos(map_extractor, fr, g_sd_cur)
-            if map_extractor is not None else {}
-        ),
+        # maps: local ped_crossing/divider/boundary/stop_line vectors
+        # (labels 0/1/2/3) in the SD frame, clipped to MAP_ROI_SIZE (empty
+        # dict if disabled)
+        map_annos=map_annos,
+        # (N, 3) float64 aligned with map_annos[STOP_LINE_LABEL]: mean
+        # traffic-light bulb position (SD local xy, NaN if unmapped) and
+        # state 1=red / 0=green / -1=unknown for the current frame
+        map_tl_annos=map_tl_annos,
     )
     _check_finite(info)
     return info
@@ -879,6 +936,20 @@ def convert(data_root, split, filter_name, output, count_only=False,
             1 for x in infos
             if sum(len(v) for v in x["map_annos"].values()) == 0
         ))
+        tl_states = np.concatenate(
+            [np.asarray(x["map_tl_annos"]).reshape(-1, 3)[:, 2]
+             for x in infos]
+        ) if infos else np.zeros((0,))
+        tl_pos_nan = np.concatenate(
+            [np.isnan(np.asarray(x["map_tl_annos"]).reshape(-1, 3)[:, 0])
+             for x in infos]
+        ) if infos else np.zeros((0,), dtype=bool)
+        stop_line_stats = dict(
+            num_red=int((tl_states == 1).sum()),
+            num_green=int((tl_states == 0).sum()),
+            num_unknown_state=int((tl_states == -1).sum()),
+            num_missing_tl_position=int(tl_pos_nan.sum()),
+        )
         map_stats = dict(
             roi_size=list(MAP_ROI_SIZE),
             num_empty_map_samples=n_map_empty,
@@ -892,11 +963,13 @@ def convert(data_root, split, filter_name, output, count_only=False,
                 )
                 for cls, v in per_class.items()
             },
+            stop_line_stats=stop_line_stats,
         )
         print(f"[info] map vectors/sample: "
               + ", ".join(f"{c} mean {v.mean():.1f}"
                           for c, v in per_class.items()))
         print(f"[info] samples with fully empty maps: {n_map_empty}")
+        print(f"[info] stop-line traffic-light states: {stop_line_stats}")
 
     metadata = dict(
         version=f"navsim-{split}-{filter_name}",

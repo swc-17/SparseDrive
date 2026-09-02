@@ -1,0 +1,99 @@
+# 2-node / 16-GPU NAVSIM stage-1 traffic-light FULL run: det + 4-class
+# maps (ped_crossing/divider/boundary/stop_line) + TL attribute branch
+# (position offset + red/green state) on the map head. Batch 8/GPU x 16 =
+# 128 global, lr 2e-4, grad_clip 25, 21,750 iters = 30 epochs of navtrain
+# train (see projects/configs/navsim/sparsedrive_navsim_stage1_tl_full_16g.py).
+# Fresh run_name so entrypoint does not auto-resume poisoned
+# navsim_stage1_tl_full_16g/latest_iter_18125.pth from prior NaN runs.
+# Requires the v1.3 *_tl infos + TL map anchors uploaded to S3 first.
+# Submit via: bash submit.sh stage1_tl_full
+name: sd_navsim_stage1_tl_full_16g_lr2e4
+model_identifier: other.training.sparsedrive.navsim.v1
+
+cluster_resources:
+  num_gpus: 16
+  gpu_machine_type: a100.8
+  preemptible: when_quota_full
+  customer_resource: research
+  allowed_regions:
+    - us-chicago-1
+
+workload_variant_config:
+  workload_type: generic
+  entrypoint_fn: lilypad_entrypoint_navsim_multinode.train_entrypoint_fn
+  entrypoint_fn_config:
+    config_file: "projects/configs/navsim/sparsedrive_navsim_stage1_tl_full_16g.py"
+    seed: 0
+    run_name: "navsim_stage1_tl_full_16g_lr2e4"
+    load_from_s3: null
+    num_gpus: 16
+    gpus_per_node: 8
+    stage_files:
+      - "data/infos/navsim_infos_navtrain_train_tl.pkl"
+      - "data/infos/navsim_infos_navtrain_val_tl.pkl"
+      - ["data/kmeans/navtrain/kmeans_det_900_navsim.npy",
+         "data/kmeans/kmeans_det_900_navsim.npy"]
+      - ["data/kmeans/navtrain/kmeans_map_100_navsim_tl.npy",
+         "data/kmeans/kmeans_map_100_navsim_tl.npy"]
+    frames_prefix: "data/navtrain_frames/"
+    blobs_root: "/tmp/navsim_blobs/trainval"
+    # the default sparsedrive310_env tarball now carries the inference-only
+    # stub mmcv (no _ext -> collect_env crashes); the pdm env is the one the
+    # recent 16-GPU training runs use (see goal_vocab_*_16g.yaml)
+    env_s3_key: "users/tejan/sparsedrive/declutter/env/sparsedrive310_pdm_env.tar.gz"
+
+  experiment_tracking_values:
+    wandb_values:
+      entity: research
+      project: sparsedrive-navsim
+
+runtime_environment:
+  code_assets:
+    root_directory: /home/tejan/lwm-rl/SparseDrive
+    pip_requirements_path: requirements_lilypad.txt
+    max_file_size_mb: 50
+    regex_excludes:
+      - "^/\\.git/"
+      - "/__pycache__/"
+      - "\\.egg-info/"
+      - "\\.so$"
+      - "\\.pyc$"
+      - "\\.pth$"
+      - "\\.pkl$"
+      - "\\.tar$"
+      - "\\.tar\\.gz$"
+      - "\\.log$"
+      - "\\.png$"
+      - "\\.jpg$"
+      - "\\.mp4$"
+      - "^/data/"
+      - "^/work_dirs/"
+      - "^/wandb/"
+      - "^/vis/"
+      - "^/logs/"
+      - "^/lilypad_stage/"
+      - "^/lilypad_logs/"
+      - "^/close_loop_log/"
+      - "^/ckpt/"
+      - "^/viz/"
+
+  required_environment_variables:
+    - WANDB_API_KEY
+    - AWS_ACCESS_KEY_ID
+    - AWS_SECRET_ACCESS_KEY
+
+  constant_environment_variables:
+    AWS_ENDPOINT_URL: "https://idskhu5vqvtl.compat.objectstorage.us-chicago-1.oraclecloud.com"
+    AWS_ENDPOINT_URL_S3: "https://idskhu5vqvtl.compat.objectstorage.us-chicago-1.oraclecloud.com"
+    AWS_DEFAULT_REGION: "us-chicago-1"
+    AWS_REGION: "us-chicago-1"
+    AWS_REQUEST_CHECKSUM_CALCULATION: "when_required"
+    AWS_RESPONSE_CHECKSUM_VALIDATION: "when_required"
+    WANDB_BASE_URL: "https://appliedintuition.wandb.io"
+    NCCL_ASYNC_ERROR_HANDLING: "1"
+    TORCH_NCCL_ASYNC_ERROR_HANDLING: "1"
+    TORCH_NCCL_HEARTBEAT_TIMEOUT_SEC: "1800"
+    TORCH_CUDA_ARCH_LIST: "8.0"
+    PATH: /usr/local/cuda/bin:$PATH
+    LD_LIBRARY_PATH: /usr/local/cuda/lib64:$LD_LIBRARY_PATH
+    PYTHONUNBUFFERED: "1"
