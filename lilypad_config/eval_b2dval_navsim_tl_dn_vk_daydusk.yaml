@@ -1,0 +1,98 @@
+# Zero-shot 2 Hz virtual-camera eval of NAVSIM TL+DN on B2D day+dusk val.
+name: sparsedrive_b2dval_navsim_tl_dn_vk_daydusk
+model_identifier: other.eval.sparsedrive.bench2drive.navsim_zero_shot
+
+cluster_resources:
+  num_gpus: 8
+  gpu_machine_type: a100.8
+  preemptible: never
+  customer_resource: research
+  allowed_regions:
+    - us-chicago-1
+
+workload_variant_config:
+  workload_type: generic
+  entrypoint_fn: lilypad_entrypoint_b2d.eval_entrypoint_fn
+  entrypoint_fn_config:
+    run_name: "b2dval_navsim_tl_dn_vk_daydusk_iter10860"
+    train_run_name: "navsim_stage1_tl_16x16_dn_map5"
+    checkpoint_s3: "s3://research-datasets-chicago/users/tejan/navsim/sparsedrive/work_dirs/navsim_stage1_tl_16x16_dn_map5/iter_10860.pth"
+    work_s3_prefix: "users/tejan/navsim/sparsedrive/work_dirs/navsim_stage1_tl_16x16_dn_map5"
+    eval_s3_prefix: "users/tejan/sparsedrive_b2d/work_dirs/b2dval_navsim_tl_dn_vk_daydusk_iter10860"
+    config_file: "projects/configs/navsim/sparsedrive_navsim_stage1_tl_dn_b2dval_vk_eval.py"
+    num_gpus: 8
+    torch_cuda_arch_list: "8.0"
+    stage_threads: 12
+    eval_samples_per_gpu: 1
+    clips_json: "users/tejan/sparsedrive_b2d/data/splits/b2d_val_daydusk_clips.json"
+    stage_infos: ["infos/b2d_infos_val.pkl"]
+    stage_files:
+      - ["users/tejan/sparsedrive_b2d/data/infos/b2d_val_daydusk_navsim_infos_fov.pkl", "data/infos/b2d_val_daydusk_navsim_infos_fov.pkl"]
+      - ["users/tejan/navsim/sparsedrive/data/kmeans/navtrain/kmeans_det_900_navsim.npy", "data/kmeans/kmeans_det_900_navsim.npy"]
+      - ["users/tejan/navsim/sparsedrive/data/kmeans/navtrain/kmeans_map_100_navsim_tl.npy", "data/kmeans/kmeans_map_100_navsim_tl.npy"]
+    env:
+      B2D_DATA_ROOT: "data/bench2drive/"
+      B2D_NAVSIM_INFOS: "data/infos/b2d_val_daydusk_navsim_infos_fov.pkl"
+    eval_metrics: ["bbox", "map"]
+    eval_runs:
+      - name: "2hz"
+        cfg_options: ["data.test.load_interval=5", "data.test.eval_config.map_eval_workers=16"]
+
+  experiment_tracking_values:
+    wandb_values:
+      entity: research
+      project: sparsedrive-b2d
+
+runtime_environment:
+  code_assets:
+    root_directory: /home/tejan/lwm-rl/SparseDrive
+    pip_requirements_path: requirements_lilypad.txt
+    max_file_size_mb: 50
+    regex_excludes:
+      - "^/\\.git"
+      - "/__pycache__/"
+      - "\\.egg-info/"
+      - "\\.so$"
+      - "\\.pyc$"
+      - "\\.pth$"
+      - "\\.pkl$"
+      - "\\.tar$"
+      - "\\.tar\\.gz$"
+      - "\\.log$"
+      - "\\.png$"
+      - "\\.jpg$"
+      - "\\.mp4$"
+      - "\\.laz$"
+      - "\\.npz$"
+      - "\\.h5$"
+      - "^/data/"
+      - "^/ckpt"
+      - "^/work_dirs/"
+      - "^/wandb/"
+      - "^/vis/"
+      - "^/logs/"
+      - "^/lilypad_logs/"
+      - "^/close_loop_log/"
+      - "^/leaderboard/"
+      - "^/scenario_runner/"
+      - "^/docs/"
+      - "^/assets/"
+
+  required_environment_variables:
+    - WANDB_API_KEY
+    - AWS_ACCESS_KEY_ID
+    - AWS_SECRET_ACCESS_KEY
+
+  constant_environment_variables:
+    AWS_ENDPOINT_URL: "https://idskhu5vqvtl.compat.objectstorage.us-chicago-1.oraclecloud.com"
+    AWS_ENDPOINT_URL_S3: "https://idskhu5vqvtl.compat.objectstorage.us-chicago-1.oraclecloud.com"
+    AWS_DEFAULT_REGION: "us-chicago-1"
+    AWS_REGION: "us-chicago-1"
+    AWS_REQUEST_CHECKSUM_CALCULATION: "when_required"
+    AWS_RESPONSE_CHECKSUM_VALIDATION: "when_required"
+    WANDB_BASE_URL: "https://appliedintuition.wandb.io"
+    PYTHONUNBUFFERED: "1"
+    B2D_DATA_ROOT: "data/bench2drive/"
+    B2D_NAVSIM_INFOS: "data/infos/b2d_val_daydusk_navsim_infos_fov.pkl"
+    WANDB_NAME: "b2dval_navsim_tl_dn_vk_daydusk"
+    TORCH_CUDA_ARCH_LIST: "8.0"

@@ -169,7 +169,27 @@ def _extract_one_clip(s3, key, v1_dir, tmp_dir):
     return clip, True
 
 
-def _stage_data(s3, repo_root, num_threads=12):
+def _load_clip_filter(s3, clips_json_key):
+    """Optional s3 key of a {"train": [...], "val": [...]} split json; returns
+    the set of clip names (without the v1/ prefix) to stage, or None."""
+    if not clips_json_key:
+        return None
+    import json
+
+    body = s3.get_object(Bucket=BUCKET, Key=clips_json_key)["Body"].read()
+    split = json.loads(body)
+    clips = set()
+    for names in split.values():
+        for n in names:
+            clips.add(n.split("/", 1)[-1])
+    logger.info("[data] clip filter %s -> %d clips", clips_json_key, len(clips))
+    return clips
+
+
+def _stage_data(s3, repo_root, num_threads=12, clips=None,
+                infos=("infos/b2d_infos_train.pkl", "infos/b2d_infos_val.pkl")):
+    """Stage the 6 rgb streams of every clip under bench2drive/raw/ (or only
+    ``clips``, a set of clip names) plus the listed info pkls / kmeans."""
     v1_dir = os.path.join(repo_root, "data", "bench2drive", "v1")
     tmp_dir = "/tmp/b2d_tars"
     os.makedirs(v1_dir, exist_ok=True)
@@ -179,8 +199,16 @@ def _stage_data(s3, repo_root, num_threads=12):
     paginator = s3.get_paginator("list_objects_v2")
     for page in paginator.paginate(Bucket=BUCKET, Prefix=f"{B2D_PREFIX}/raw/"):
         for obj in page.get("Contents", []):
-            if obj["Key"].endswith(".tar.gz"):
-                keys.append(obj["Key"])
+            if not obj["Key"].endswith(".tar.gz"):
+                continue
+            if clips is not None:
+                clip = os.path.basename(obj["Key"])[:-len(".tar.gz")]
+                if RENAME_FIX.get(clip, clip) not in clips:
+                    continue
+            keys.append(obj["Key"])
+    if clips is not None and len(keys) != len(clips):
+        logger.warning("[data] clip filter asked for %d clips, found %d tars",
+                       len(clips), len(keys))
     logger.info("[data] %d clip tars to stage", len(keys))
 
     done = 0
@@ -194,8 +222,8 @@ def _stage_data(s3, repo_root, num_threads=12):
                 logger.info("[data] %d/%d clips staged", done, len(keys))
     logger.info("[data] staging complete: %d clips", done)
 
-    for rel in ["infos/b2d_infos_train.pkl", "infos/b2d_infos_val.pkl",
-                "kmeans/kmeans_det_900.npy", "kmeans/kmeans_map_100.npy"]:
+    for rel in list(infos) + ["kmeans/kmeans_det_900.npy",
+                              "kmeans/kmeans_map_100.npy"]:
         _download_file_s3(s3, BUCKET, f"{B2D_PREFIX}/{rel}",
                           os.path.join(repo_root, "data", rel))
     _download_file_s3(s3, BUCKET, f"{B2D_PREFIX}/ckpt/resnet50-19c8e357.pth",
@@ -383,6 +411,19 @@ def eval_entrypoint_fn(config: dict[Any, Any]) -> None:
 
 
 def _run_eval(config, num_gpus):
+    """config keys (all optional unless noted):
+        run_name, config_file, train_run_name | checkpoint_s3 (s3:// uri),
+        work_s3_prefix, eval_s3_prefix, torch_cuda_arch_list, stage_threads,
+        clips_json (s3 key of a split json -> stage only those clips),
+        stage_infos (list of bench2drive/<rel> pkls; default train+val),
+        stage_files (list of [s3_key, repo_rel] extra downloads, e.g. a
+            converted infos pkl or NAVSIM kmeans anchors),
+        eval_metrics (list, default ["bbox"]), eval_samples_per_gpu (default 4; use 1
+            for sequential temporal fusion -- see note in the eval command),
+        eval_runs (list of {name, cfg_options: [..]}; default one run with
+            no extra options) -- each run writes work_dir/<name>,
+        env (dict of extra env vars for the eval process).
+    """
     repo_root = os.path.abspath(os.path.dirname(__file__))
     run_name = config.get("run_name", "b2d_stage1_eval")
     config_file = config.get(
@@ -395,7 +436,14 @@ def _run_eval(config, num_gpus):
     s3 = _s3_client()
 
     env_python = _stage_env(s3)
-    _stage_data(s3, repo_root, num_threads=int(config.get("stage_threads", 12)))
+    clips = _load_clip_filter(s3, config.get("clips_json"))
+    stage_infos = config.get(
+        "stage_infos", ["infos/b2d_infos_train.pkl", "infos/b2d_infos_val.pkl"]
+    )
+    _stage_data(s3, repo_root, num_threads=int(config.get("stage_threads", 12)),
+                clips=clips, infos=stage_infos)
+    for s3_key, repo_rel in config.get("stage_files", []):
+        _download_file_s3(s3, BUCKET, s3_key, os.path.join(repo_root, repo_rel))
     _compile_ops(env_python, repo_root, config.get("torch_cuda_arch_list", "8.0"))
 
     ckpt_s3 = config.get("checkpoint_s3")
@@ -415,21 +463,102 @@ def _run_eval(config, num_gpus):
         "PYTHONPATH": repo_root,
         "WANDB_NAME": run_name,
         "PYTHONUNBUFFERED": "1",
+        **{k: str(v) for k, v in config.get("env", {}).items()},
     }
-    _run_cmd(
-        [env_python, "-m", "torch.distributed.run",
-         f"--nproc_per_node={num_gpus}", "--master_port=28652",
-         os.path.join(repo_root, "tools", "test_pyfocal.py"),
-         os.path.join(repo_root, config_file),
-         local_ckpt,
-         "--launcher", "pytorch",
-         "--eval", "bbox",
-         "--cfg-options",
-         f"work_dir={work_dir}",
-         "data.workers_per_gpu=4",
-         "data.test.samples_per_gpu=4"],
-        tag="eval", cwd=repo_root, env=eval_env,
-    )
-    logger.info("[upload] eval work_dir -> s3://%s/%s", BUCKET, out_prefix)
-    _upload_dir(s3, work_dir, BUCKET, out_prefix)
+    eval_metrics = list(config.get("eval_metrics", ["bbox"]))
+    eval_runs = config.get("eval_runs") or [dict(name="", cfg_options=[])]
+    for run in eval_runs:
+        run_dir = os.path.join(work_dir, run.get("name", "")) if run.get("name") else work_dir
+        os.makedirs(run_dir, exist_ok=True)
+        _run_cmd(
+            [env_python, "-m", "torch.distributed.run",
+             f"--nproc_per_node={num_gpus}", "--master_port=28652",
+             os.path.join(repo_root, "tools", "test_pyfocal.py"),
+             os.path.join(repo_root, config_file),
+             local_ckpt,
+             "--launcher", "pytorch",
+             "--eval", *eval_metrics,
+             "--cfg-options",
+             f"work_dir={run_dir}",
+             "data.workers_per_gpu=4",
+             # NOTE: samples_per_gpu>1 puts consecutive frames of one sequence
+             # in the same batch, so the temporal InstanceBank sees a jump of
+             # `samples_per_gpu` frames between calls (2 s at 2 Hz for bs 4).
+             # Use 1 for a faithful sequential eval (mini val 2 Hz: bs1 mAP
+             # 0.204 vs bs4 0.057 for the NAVSIM teacher).
+             f"data.test.samples_per_gpu={int(config.get('eval_samples_per_gpu', 4))}"]
+            + [str(o) for o in run.get("cfg_options", [])],
+            tag=f"eval:{run.get('name') or run_name}", cwd=repo_root, env=eval_env,
+        )
+        # upload after every pass so a preemption keeps finished results
+        logger.info("[upload] eval work_dir -> s3://%s/%s", BUCKET, out_prefix)
+        _upload_dir(s3, work_dir, BUCKET, out_prefix)
     logger.info("[done] eval %s", run_name)
+
+
+def rangeap_entrypoint_fn(config: dict[Any, Any]) -> None:
+    """Compute mAP-vs-range-cutoff curves from already-produced results.pkl
+    files, entirely on the cluster node's local disk (results.pkl can be
+    10+ GB, too big to shuttle to a laptop). Uploads only the small output
+    JSONs.
+
+    config keys:
+        runs: list of {name, infos_s3, results_s3, out_key} -- for each,
+            downloads infos_s3 + results_s3 locally, runs
+            tools_b2d/range_ap_b2d.py, uploads the resulting JSON to
+            s3://BUCKET/<out_key>.
+        config_file (default projects/configs/sparsedrive_b2d_stage1.py)
+        ranges (default [5, 10, 20, 30, 40, 50])
+    """
+    import ray
+
+    @ray.remote(num_gpus=0, num_cpus=8)
+    def _rangeap(cfg):
+        _run_rangeap(cfg)
+
+    if not ray.is_initialized():
+        ray.init()
+    ray.get(_rangeap.remote(config))
+
+
+def _run_rangeap(config):
+    repo_root = os.path.abspath(os.path.dirname(__file__))
+    s3 = _s3_client()
+    env_python = _stage_env(s3)
+    _compile_ops(env_python, repo_root, config.get("torch_cuda_arch_list", "8.0"))
+    config_file = config.get("config_file", "projects/configs/sparsedrive_b2d_stage1.py")
+    ranges = config.get("ranges", [5, 10, 20, 30, 40, 50])
+    local_dir = os.path.join(repo_root, "work_dirs", "rangeap_tmp")
+    os.makedirs(local_dir, exist_ok=True)
+
+    for run in config["runs"]:
+        name = run["name"]
+        infos_local = os.path.join(local_dir, f"{name}_infos.pkl")
+        results_local = os.path.join(local_dir, f"{name}_results.pkl")
+        out_local = os.path.join(local_dir, f"{name}_rangeap.json")
+
+        ib, ik = run["infos_s3"].replace("s3://", "").split("/", 1)
+        rb, rk = run["results_s3"].replace("s3://", "").split("/", 1)
+        _download_file_s3(s3, ib, ik, infos_local)
+        _download_file_s3(s3, rb, rk, results_local)
+
+        _run_cmd(
+            [env_python, os.path.join(repo_root, "tools_b2d", "range_ap_b2d.py"),
+             "--infos", infos_local,
+             "--results", results_local,
+             "--config", config_file,
+             "--label", name,
+             "--ranges", *[str(r) for r in ranges],
+             "--out", out_local],
+            tag=f"rangeap:{name}", cwd=repo_root,
+            env={**os.environ, "PATH": f"{os.path.join(ENV_LOCAL, 'bin')}:{os.environ.get('PATH', '')}",
+                 "PYTHONPATH": repo_root},
+        )
+        ob, ok = run["out_key"].replace("s3://", "").split("/", 1) if run["out_key"].startswith("s3://") else (BUCKET, run["out_key"])
+        _put_file_nonchunked(s3, out_local, ob, ok)
+        logger.info("[upload] %s -> s3://%s/%s", out_local, ob, ok)
+        # free disk before the next run's downloads
+        os.remove(infos_local)
+        os.remove(results_local)
+
+    logger.info("[done] rangeap")

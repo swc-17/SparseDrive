@@ -1,0 +1,82 @@
+name: sparsedrive_b2d_sdv1_rangeap_compute
+model_identifier: other.eval.sparsedrive.bench2drive.v1
+
+cluster_resources:
+  num_gpus: 8
+  gpu_machine_type: a100.8
+  preemptible: never
+  customer_resource: research
+  allowed_regions:
+    - us-chicago-1
+
+workload_variant_config:
+  workload_type: generic
+  entrypoint_fn: lilypad_entrypoint_b2d.rangeap_entrypoint_fn
+  entrypoint_fn_config:
+    config_file: "projects/configs/sparsedrive_b2d_stage1.py"
+    ranges: [5, 10, 20, 30, 40, 50]
+    runs:
+      - name: "sdv1_all"
+        infos_s3: "s3://research-datasets-chicago/bench2drive/infos/b2d_infos_val.pkl"
+        results_s3: "s3://research-datasets-chicago/users/tejan/sparsedrive_b2d/work_dirs/b2d_stage1_v1_rangeap_iter73360/all/results.pkl"
+        out_key: "users/tejan/sparsedrive_b2d/work_dirs/b2d_stage1_v1_rangeap_iter73360/all_rangeap.json"
+      - name: "sdv1_daydusk"
+        infos_s3: "s3://research-datasets-chicago/users/tejan/sparsedrive_b2d/data/infos/b2d_infos_val_daydusk.pkl"
+        results_s3: "s3://research-datasets-chicago/users/tejan/sparsedrive_b2d/work_dirs/b2d_stage1_v1_rangeap_iter73360/daydusk/results.pkl"
+        out_key: "users/tejan/sparsedrive_b2d/work_dirs/b2d_stage1_v1_rangeap_iter73360/daydusk_rangeap.json"
+
+  experiment_tracking_values:
+    wandb_values:
+      entity: research
+      project: sparsedrive-b2d
+
+runtime_environment:
+  code_assets:
+    root_directory: /home/tejan/lwm-rl/SparseDrive
+    pip_requirements_path: requirements_lilypad.txt
+    max_file_size_mb: 50
+    regex_excludes:
+      - "^/\\.git"
+      - "/__pycache__/"
+      - "\\.egg-info/"
+      - "\\.so$"
+      - "\\.pyc$"
+      - "\\.pth$"
+      - "\\.pkl$"
+      - "\\.tar$"
+      - "\\.tar\\.gz$"
+      - "\\.log$"
+      - "\\.png$"
+      - "\\.jpg$"
+      - "\\.mp4$"
+      - "\\.laz$"
+      - "\\.npz$"
+      - "\\.h5$"
+      - "^/data/"
+      - "^/ckpt"
+      - "^/work_dirs/"
+      - "^/wandb/"
+      - "^/vis/"
+      - "^/logs/"
+      - "^/lilypad_logs/"
+      - "^/close_loop_log/"
+      - "^/leaderboard/"
+      - "^/scenario_runner/"
+      - "^/docs/"
+      - "^/assets/"
+
+  required_environment_variables:
+    - WANDB_API_KEY
+    - AWS_ACCESS_KEY_ID
+    - AWS_SECRET_ACCESS_KEY
+
+  constant_environment_variables:
+    AWS_ENDPOINT_URL: "https://idskhu5vqvtl.compat.objectstorage.us-chicago-1.oraclecloud.com"
+    AWS_ENDPOINT_URL_S3: "https://idskhu5vqvtl.compat.objectstorage.us-chicago-1.oraclecloud.com"
+    AWS_DEFAULT_REGION: "us-chicago-1"
+    AWS_REGION: "us-chicago-1"
+    AWS_REQUEST_CHECKSUM_CALCULATION: "when_required"
+    AWS_RESPONSE_CHECKSUM_VALIDATION: "when_required"
+    WANDB_BASE_URL: "https://appliedintuition.wandb.io"
+    PYTHONUNBUFFERED: "1"
+    TORCH_CUDA_ARCH_LIST: "8.0"
